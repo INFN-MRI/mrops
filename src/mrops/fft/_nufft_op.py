@@ -71,7 +71,7 @@ class NUFFT(Linop):
     def _apply(self, input):
         output = _apply(self.plan, input)
         return output.reshape(
-            *output.shape[: -self.fourier_ndim + 1], *self.coord.shape[:-1]
+            *output.shape[:-1], *self.coord.shape[:-1]
         )
 
     def _adjoint_linop(self):

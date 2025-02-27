@@ -2,6 +2,7 @@
 
 __all__ = ["nufft", "nufft_adjoint"]
 
+import gc
 import math
 
 from types import SimpleNamespace
@@ -16,6 +17,8 @@ from mrinufft.operators.interfaces.utils import is_cuda_array
 
 from .._sigpy.fourier import estimate_shape
 
+if mrinufft.check_backend("cufinufft"):
+    import cupy as cp
 
 def nufft(
     input: ArrayLike,
@@ -154,14 +157,19 @@ def _apply(plan, input):
         _nufft = plan.cpu
 
     # actual computation
-    if input.ndim == 1:
+    if input.ndim == ndim:
         output = _nufft.op(input)
     else:
         output = np.stack([_nufft.op(batch) for batch in input])
 
     # reshape from (B, samples) to (..., samples)
-    if input.ndim != 1:
+    if output.ndim != 1:
         output = output.reshape(*broadcast_shape, *output.shape[1:])
+        
+    # clean-up
+    if is_cuda_array(input):
+        gc.collect()
+        cp._default_memory_pool.free_all_blocks()
 
     return output
 
@@ -188,5 +196,10 @@ def _apply_adj(plan, input):
     # reshape from (B, *grid_shape) to (..., *grid_shape)
     if input.ndim != 1:
         output = output.reshape(*broadcast_shape, *output.shape[1:])
+        
+    # clean-up
+    if is_cuda_array(input):
+        gc.collect()
+        cp._default_memory_pool.free_all_blocks()
 
     return output
