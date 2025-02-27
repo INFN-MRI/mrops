@@ -10,6 +10,7 @@ from .._sigpy.linop import Linop
 
 from ._nufft import __nufft_init__, _apply, _apply_adj
 
+
 class NUFFT(Linop):
     """
     NUFFT linear operator.
@@ -28,6 +29,8 @@ class NUFFT(Linop):
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
+    batched : bool, optional
+        Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
 
     """
 
@@ -37,6 +40,7 @@ class NUFFT(Linop):
         coord: ArrayLike,
         oversamp: float = 1.25,
         eps: float = 1e-3,
+        batched: bool = False,
         plan: SimpleNamespace | None = None,
     ):
         self.signal_ndim = coord.shape[-1]
@@ -44,31 +48,40 @@ class NUFFT(Linop):
         self.coord = coord
         self.oversamp = oversamp
         self.eps = eps
-        
+        self.batched = batched
+
         # get input and output shape
-        ishape = ishape[-self.signal_ndim:]
-        oshape = coord.shape[:self.fourier_ndim]
-        
+        ishape = ishape[-self.signal_ndim :]
+        oshape = coord.shape[: self.fourier_ndim]
+
         # build plan
         if plan is not None:
             self.plan = plan
         else:
             self.plan = __nufft_init__(coord, ishape, oversamp, eps)
-            
+
         # initalize operator
         super().__init__(oshape, ishape)
-        
+
         # enable broadcasting
-        self.ishape = [-1] + self.ishape
-        self.oshape = [-1] + self.oshape
+        if self.batched:
+            self.ishape = [-1] + self.ishape
+            self.oshape = [-1] + self.oshape
 
     def _apply(self, input):
         output = _apply(self.plan, input)
-        return output.reshape(*output.shape[:-self.fourier_ndim+1], *self.coord.shape[:-1])
+        return output.reshape(
+            *output.shape[: -self.fourier_ndim + 1], *self.coord.shape[:-1]
+        )
 
     def _adjoint_linop(self):
-        ishape = self.ishape[-self.signal_ndim:]
-        return NUFFTAdjoint(ishape, self.coord, self.oversamp, self.eps, self.plan)
+        if self.batched:
+            ishape = self.ishape[-self.signal_ndim :]
+        else:
+            ishape = self.ishape
+        return NUFFTAdjoint(
+            ishape, self.coord, self.oversamp, self.eps, self.batched, self.plan
+        )
 
     def _normal_linop(self):
         return self.H * self
@@ -92,6 +105,8 @@ class NUFFTAdjoint(Linop):
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
+    batched : bool, optional
+        Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
 
     """
 
@@ -101,6 +116,7 @@ class NUFFTAdjoint(Linop):
         coord: ArrayLike,
         oversamp: float = 1.25,
         eps: float = 1e-3,
+        batched: bool = False,
         plan: SimpleNamespace | None = None,
     ):
         self.signal_ndim = coord.shape[-1]
@@ -108,28 +124,35 @@ class NUFFTAdjoint(Linop):
         self.coord = coord
         self.oversamp = oversamp
         self.eps = eps
-        
+        self.batched = batched
+
         # get input and output shape
-        ishape = coord.shape[:self.fourier_ndim]
-        oshape = oshape[-self.signal_ndim:]
-        
+        ishape = coord.shape[: self.fourier_ndim]
+        oshape = oshape[-self.signal_ndim :]
+
         # build plan
         if plan is not None:
             self.plan = plan
         else:
             self.plan = __nufft_init__(coord, oshape, oversamp, eps)
-            
+
         # initalize operator
         super().__init__(oshape, ishape)
-        
+
         # enable broadcasting
-        self.ishape = [-1] + self.ishape
-        self.oshape = [-1] + self.oshape
+        if self.batched:
+            self.ishape = [-1] + self.ishape
+            self.oshape = [-1] + self.oshape
 
     def _apply(self, input):
-        input = input.reshape(*input.shape[:-self.fourier_ndim], -1)
+        input = input.reshape(*input.shape[: -self.fourier_ndim], -1)
         return _apply_adj(self.plan, input)
 
     def _adjoint_linop(self):
-        oshape = self.oshape[-self.signal_ndim:]
-        return NUFFT(oshape, self.coord, self.oversamp, self.eps, self.plan)
+        if self.batched:
+            oshape = self.oshape[-self.signal_ndim :]
+        else:
+            oshape = self.oshape
+        return NUFFT(
+            oshape, self.coord, self.oversamp, self.eps, self.batched, self.plan
+        )

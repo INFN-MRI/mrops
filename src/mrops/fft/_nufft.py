@@ -121,12 +121,18 @@ def __nufft_init__(
     cpu_nufft = mrinufft.get_operator("finufft")(
         samples=coord.reshape(-1, coord.shape[-1]),
         shape=shape[::-1],
+        squeeze_dims=True,
+        upsampfac=oversamp,
+        eps=eps,
     )
 
     if mrinufft.check_backend("cufinufft"):
         gpu_nufft = mrinufft.get_operator("cufinufft")(
             samples=coord.reshape(-1, coord.shape[-1]),
             shape=shape[::-1],
+            squeeze_dims=True,
+            upsampfac=oversamp,
+            eps=eps,
         )
     else:
         gpu_nufft = None
@@ -182,5 +188,5 @@ def _apply_adj(plan, input):
     # reshape from (B, *grid_shape) to (..., *grid_shape)
     if input.ndim != 1:
         output = output.reshape(*broadcast_shape, *output.shape[1:])
-        
+
     return output

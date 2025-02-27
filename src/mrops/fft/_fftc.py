@@ -12,6 +12,7 @@ from mrinufft._array_compat import with_torch
 
 from .._sigpy import util
 
+
 @with_torch
 def fft(
     input: ArrayLike,
