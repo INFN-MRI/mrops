@@ -41,7 +41,7 @@ classifiers = [  # Optional
 
 dependencies = [
 "sigpy",
-"mrinufft",
+"mri-nufft",
 "torch",
 "finufft",
 ]

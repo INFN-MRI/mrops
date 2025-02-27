@@ -3,20 +3,18 @@
 __all__ = ["nufft", "nufft_adjoint"]
 
 import math
+
 from types import SimpleNamespace
 
 import numpy as np
 from numpy.typing import ArrayLike
-
-from sigpy.fourier import estimate_shape
 
 import mrinufft
 
 from mrinufft._array_compat import with_numpy_cupy
 from mrinufft.operators.interfaces.utils import is_cuda_array
 
-if mrinufft.check_backend("cufinufft"):
-    import cupy as cp
+from .._sigpy.fourier import estimate_shape
 
 
 def nufft(
@@ -102,6 +100,7 @@ def nufft_adjoint(
 
 
 # %% local subroutines
+@with_numpy_cupy
 def __nufft_init__(
     coord: ArrayLike,
     shape: ArrayLike | None = None,
@@ -116,7 +115,7 @@ def __nufft_init__(
 
     # normalize
     cmax = ((coord**2).sum(axis=-1) ** 0.5).max()
-    coord = 2 * math.pi * coord / cmax
+    coord = math.pi * coord / cmax
 
     # prepare CPU nufft
     cpu_nufft = mrinufft.get_operator("finufft")(
@@ -126,7 +125,7 @@ def __nufft_init__(
 
     if mrinufft.check_backend("cufinufft"):
         gpu_nufft = mrinufft.get_operator("cufinufft")(
-            samples=cp.asarray(coord).reshape(-1, coord.shape[-1]),
+            samples=coord.reshape(-1, coord.shape[-1]),
             shape=shape[::-1],
         )
     else:
@@ -141,44 +140,47 @@ def _apply(plan, input):
     ndim = plan.cpu.ndim
     broadcast_shape = input.shape[:-ndim]
     input = input.reshape(-1, *input.shape[-ndim:])
-    
+
     # select operator based on computational device
-    if is_cuda_array:
+    if is_cuda_array(input):
         _nufft = plan.gpu
     else:
         _nufft = plan.cpu
-    
+
     # actual computation
     if input.ndim == 1:
         output = _nufft.op(input)
     else:
         output = np.stack([_nufft.op(batch) for batch in input])
-        
+
     # reshape from (B, samples) to (..., samples)
-    if input.ndim == 1:
+    if input.ndim != 1:
         output = output.reshape(*broadcast_shape, *output.shape[1:])
-        
+
     return output
-    
+
+
 @with_numpy_cupy
 def _apply_adj(plan, input):
     # reshape from (..., samples) to (B, samples)
     nsamples = plan.cpu.n_samples
     broadcast_shape = input.shape[:-1]
     input = input.reshape(-1, nsamples)
-    
+
     # select operator based on computational device
-    if is_cuda_array:
+    if is_cuda_array(input):
         _nufft = plan.gpu
     else:
         _nufft = plan.cpu
-    
+
     # actual computation
     if input.ndim == 1:
         output = _nufft.adj_op(input)
     else:
         output = np.stack([_nufft.adj_op(batch) for batch in input])
-        
+
     # reshape from (B, *grid_shape) to (..., *grid_shape)
-    if input.ndim == 1:
+    if input.ndim != 1:
         output = output.reshape(*broadcast_shape, *output.shape[1:])
+        
+    return output

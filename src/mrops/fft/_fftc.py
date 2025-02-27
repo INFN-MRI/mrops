@@ -2,19 +2,15 @@
 
 __all__ = ["fft", "ifft"]
 
-import warnings
 from math import ceil
 
 from numpy.typing import ArrayLike
 
 import torch
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    from sigpy import util
-
 from mrinufft._array_compat import with_torch
 
+from .._sigpy import util
 
 @with_torch
 def fft(

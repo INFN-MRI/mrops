@@ -4,10 +4,9 @@ __all__ = ["FFT", "IFFT"]
 
 from numpy.typing import ArrayLike
 
-from sigpy.linop import Linop, Identity
+from .._sigpy.linop import Linop, Identity
 
 from ._fftc import fft, ifft
-
 
 class FFT(Linop):
     """
