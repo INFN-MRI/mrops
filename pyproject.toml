@@ -44,6 +44,7 @@ dependencies = [
 "mri-nufft",
 "torch",
 "finufft",
+"numexpr",
 ]
 
 [project.optional-dependencies] # Optional

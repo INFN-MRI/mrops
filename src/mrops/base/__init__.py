@@ -1,4 +1,4 @@
-"""Fourier-related Linear operators."""
+"""Basic Linear operators for MRI encoding."""
 
 __all__ = []
 
