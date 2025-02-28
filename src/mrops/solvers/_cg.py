@@ -2,6 +2,8 @@
 
 __all__ = ["ConjugateGradient"]
 
+import gc
+
 from numpy.typing import ArrayLike
 
 from mrinufft._array_compat import CUPY_AVAILABLE
@@ -11,6 +13,7 @@ from mrinufft._array_compat import with_numpy_cupy
 from scipy.sparse.linalg import cg as scipy_cg
 
 if CUPY_AVAILABLE:
+    import cupy as cp
     from cupyx.scipy.sparse.linalg import cg as cupy_cg
 
 from .._sigpy.app import App
@@ -69,6 +72,9 @@ class ConjugateGradient(App):
         super().__init__(_alg, show_pbar, leave_pbar, record_time)
         
     def _output(self):
+        gc.collect()
+        if CUPY_AVAILABLE:
+            cp._default_memory_pool.free_all_blocks()
         return self.alg.x
     
 

@@ -2,6 +2,9 @@
 
 __all__ = ["LSMR"]
 
+import gc
+import warnings
+
 from numpy.typing import ArrayLike
 
 from mrinufft._array_compat import CUPY_AVAILABLE
@@ -11,6 +14,7 @@ from mrinufft._array_compat import with_numpy_cupy
 from scipy.sparse.linalg import lsmr as scipy_lsmr
 
 if CUPY_AVAILABLE:
+    import cupy as cp
     from ._cupy_lsmr import lsmr as cupy_lsmr
     
 from .._sigpy.app import App
@@ -68,6 +72,9 @@ class LSMR(App):
         super().__init__(_alg, show_pbar, leave_pbar, record_time)
         
     def _output(self):
+        gc.collect()
+        if CUPY_AVAILABLE:
+            cp._default_memory_pool.free_all_blocks()
         return self.alg.x
     
 
@@ -115,6 +122,9 @@ def _lsmr(A, b, x0=None, atol=0, maxiter=None, M=None):
     if x0 is not None:
         x0 = x0.ravel()
     if get_array_module(b).__name__ == "numpy":
-        return scipy_lsmr(A, b, x0=x0, atol=atol, maxiter=maxiter)[0]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = scipy_lsmr(A, b, x0=x0, atol=atol, maxiter=maxiter)[0]
+        return res.astype(b.dtype)
     else:
         return cupy_lsmr(A, b, x0=x0, atol=atol, maxiter=maxiter)[0]
