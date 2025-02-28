@@ -8,5 +8,5 @@ with warnings.catch_warnings():
     from sigpy.util import _normalize_axes
     from sigpy import util
 
-__all__ = ["_normalize_axes"] # noqa
+__all__ = ["_normalize_axes"]  # noqa
 __all__.extend(util.__all__)

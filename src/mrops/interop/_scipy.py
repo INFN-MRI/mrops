@@ -47,7 +47,7 @@ def aslinearoperator(A: Linop, input: ArrayLike) -> LinearOperator:
         batched = A.linops[0].batched
     else:
         batched = False
-        
+
     if batched:
         batchsize = input.shape[0]
     else:
@@ -85,7 +85,9 @@ class BaseSigpyLinearOperator:  # noqa
 
     def _rmatvec(self, y):
         if self.batched:
-            y = y.reshape(self.batchsize, *self.oshape[1:])  # Reshape output for adjoint operation
+            y = y.reshape(
+                self.batchsize, *self.oshape[1:]
+            )  # Reshape output for adjoint operation
         else:
             y = y.reshape(self.oshape)  # Reshape output for adjoint operation
         x = self.linop.H.apply(y)  # Apply the adjoint Linop

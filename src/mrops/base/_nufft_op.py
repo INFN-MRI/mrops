@@ -70,9 +70,7 @@ class NUFFT(Linop):
 
     def _apply(self, input):
         output = _apply(self.plan, input)
-        return output.reshape(
-            *output.shape[:-1], *self.coord.shape[:-1]
-        )
+        return output.reshape(*output.shape[:-1], *self.coord.shape[:-1])
 
     def _adjoint_linop(self):
         if self.batched:

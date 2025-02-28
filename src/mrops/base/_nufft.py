@@ -20,6 +20,7 @@ from .._sigpy.fourier import estimate_shape
 if mrinufft.check_backend("cufinufft"):
     import cupy as cp
 
+
 def nufft(
     input: ArrayLike,
     coord: ArrayLike,
@@ -165,7 +166,7 @@ def _apply(plan, input):
     # reshape from (B, samples) to (..., samples)
     if output.ndim != 1:
         output = output.reshape(*broadcast_shape, *output.shape[1:])
-        
+
     # clean-up
     if is_cuda_array(input):
         gc.collect()
@@ -196,7 +197,7 @@ def _apply_adj(plan, input):
     # reshape from (B, *grid_shape) to (..., *grid_shape)
     if input.ndim != 1:
         output = output.reshape(*broadcast_shape, *output.shape[1:])
-        
+
     # clean-up
     if is_cuda_array(input):
         gc.collect()

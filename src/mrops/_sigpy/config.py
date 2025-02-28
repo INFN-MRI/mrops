@@ -4,4 +4,4 @@ import warnings
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    from sigpy.config import * # noqa
+    from sigpy.config import *  # noqa

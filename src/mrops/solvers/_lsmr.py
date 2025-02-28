@@ -16,7 +16,7 @@ from scipy.sparse.linalg import lsmr as scipy_lsmr
 if CUPY_AVAILABLE:
     import cupy as cp
     from ._cupy_lsmr import lsmr as cupy_lsmr
-    
+
 from .._sigpy.app import App
 from .._sigpy.alg import Alg
 from .._sigpy.linop import Linop
@@ -50,43 +50,43 @@ class LSMR(App):
         Tolerance for stopping condition (default is ``0.0``).
     show_pbar : bool, optional
         Toggle whether show progress bar (default is ``False``).
-    leave_pbar : bool, optional 
+    leave_pbar : bool, optional
         Toggle whether to leave progress bar after finished (default is ``True``).
     record_time : bool, optional
         Toggle wheter record runtime (default is ``False``).
 
     """
-    
+
     def __init__(
-            self, 
-            A: Linop, 
-            b: ArrayLike, 
-            x: ArrayLike | None = None, 
-            max_iter: int = 10, 
-            tol: float = 0.0,
-            show_pbar: bool = False,
-            leave_pbar: bool = True,
-            record_time: bool = False,
-        ):
+        self,
+        A: Linop,
+        b: ArrayLike,
+        x: ArrayLike | None = None,
+        max_iter: int = 10,
+        tol: float = 0.0,
+        show_pbar: bool = False,
+        leave_pbar: bool = True,
+        record_time: bool = False,
+    ):
         _alg = _LSMR(A, b, x, max_iter, tol)
         super().__init__(_alg, show_pbar, leave_pbar, record_time)
-        
+
     def _output(self):
         gc.collect()
         if CUPY_AVAILABLE:
             cp._default_memory_pool.free_all_blocks()
         return self.alg.x
-    
+
 
 class _LSMR(Alg):
     def __init__(
-            self, 
-            A: Linop, 
-            b: ArrayLike, 
-            x: ArrayLike, 
-            max_iter: int = 10, 
-            tol: float = 0.0,
-        ):
+        self,
+        A: Linop,
+        b: ArrayLike,
+        x: ArrayLike,
+        max_iter: int = 10,
+        tol: float = 0.0,
+    ):
         self.A = aslinearoperator(A, b)
         self.b = b
         self.x = x
@@ -95,22 +95,26 @@ class _LSMR(Alg):
 
         super().__init__(max_iter)
 
-    def update(self): # noqa
+    def update(self):  # noqa
         # get shape
         shape = self.b.shape
-        
+
         # actual run
         self.x = _lsmr(
-            self.A, self.b.ravel(), self.x, atol=self.tol, maxiter=self.max_iter,
-        ) # here we let scipy/cupy handle steps.
-        
+            self.A,
+            self.b.ravel(),
+            self.x,
+            atol=self.tol,
+            maxiter=self.max_iter,
+        )  # here we let scipy/cupy handle steps.
+
         # reshape back
         self.b = self.b.reshape(*shape)
         if self.A.batched:
             self.x = self.x.reshape(self.A.batchsize, *self.A.ishape[1:])
         else:
             self.x = self.x.reshape(*self.A.ishape)
-            
+
         self._finished = True
 
     def _done(self):

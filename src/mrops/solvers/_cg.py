@@ -49,45 +49,45 @@ class ConjugateGradient(App):
         Tolerance for stopping condition (default is ``0.0``).
     show_pbar : bool, optional
         Toggle whether show progress bar (default is ``False``).
-    leave_pbar : bool, optional 
+    leave_pbar : bool, optional
         Toggle whether to leave progress bar after finished (default is ``True``).
     record_time : bool, optional
         Toggle wheter record runtime (default is ``False``).
 
     """
-    
+
     def __init__(
-            self, 
-            A: Linop, 
-            b: ArrayLike, 
-            x: ArrayLike | None = None, 
-            P: Linop | None = None, 
-            max_iter: int = 10, 
-            tol: float = 0.0,
-            show_pbar: bool = False,
-            leave_pbar: bool = True,
-            record_time: bool = False,
-        ):
+        self,
+        A: Linop,
+        b: ArrayLike,
+        x: ArrayLike | None = None,
+        P: Linop | None = None,
+        max_iter: int = 10,
+        tol: float = 0.0,
+        show_pbar: bool = False,
+        leave_pbar: bool = True,
+        record_time: bool = False,
+    ):
         _alg = _ConjugateGradient(A, b, x, P, max_iter, tol)
         super().__init__(_alg, show_pbar, leave_pbar, record_time)
-        
+
     def _output(self):
         gc.collect()
         if CUPY_AVAILABLE:
             cp._default_memory_pool.free_all_blocks()
         return self.alg.x
-    
+
 
 class _ConjugateGradient(Alg):
     def __init__(
-            self, 
-            A: Linop, 
-            b: ArrayLike, 
-            x: ArrayLike, 
-            P: Linop | None = None, 
-            max_iter: int = 10, 
-            tol: float = 0.0,
-        ):
+        self,
+        A: Linop,
+        b: ArrayLike,
+        x: ArrayLike,
+        P: Linop | None = None,
+        max_iter: int = 10,
+        tol: float = 0.0,
+    ):
         self.A = aslinearoperator(A, b)
         self.b = b
         self.x = x
@@ -97,22 +97,27 @@ class _ConjugateGradient(Alg):
 
         super().__init__(max_iter)
 
-    def update(self): # noqa
+    def update(self):  # noqa
         if self.x is None:
             self.x = 0 * self.b
-            
+
         # get shape
         shape = self.b.shape
-        
+
         # actual run
         self.x = _cg(
-            self.A, self.b.ravel(), self.x.ravel(), atol=self.tol, maxiter=self.max_iter, M=self.P
-        ) # here we let scipy/cupy handle steps.
-        
+            self.A,
+            self.b.ravel(),
+            self.x.ravel(),
+            atol=self.tol,
+            maxiter=self.max_iter,
+            M=self.P,
+        )  # here we let scipy/cupy handle steps.
+
         # reshape back
         self.b = self.b.reshape(*shape)
         self.x = self.x.reshape(*shape)
-        
+
         self._finished = True
 
     def _done(self):
