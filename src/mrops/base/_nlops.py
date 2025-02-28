@@ -26,7 +26,7 @@ class NonLinop(abc.ABC):
         Cached Jacobian operator dF(x).
     """
 
-    def __init__(self, x0):
+    def __init__(self):
         """
         Initialize the nonlinear operator with an initial guess x0.
 
@@ -35,10 +35,9 @@ class NonLinop(abc.ABC):
         x0 : array-like
             Initial guess for the variable x.
         """
-        self.x = x0
+        self.x = None
         self.F_x = None
         self.DF_x = None
-        self.update(x0)
 
     def update(self, x_new):
         """

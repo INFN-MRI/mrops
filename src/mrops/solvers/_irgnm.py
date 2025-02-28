@@ -1,9 +1,13 @@
 """Iteratively Renormalized Gauss Newton Method."""
 
-__all__ = ["IRGNMBase"]
+__all__ = ["IrgnmBase"]
 
+from numpy.typing import ArrayLike
 
-class IRGNMBase:
+from .._sigpy.alg import Alg
+from ..base import NonLinop
+
+class IrgnmBase(Alg):
     """
     Generic Iteratively Regularized Gauss-Newton Method (IRGNM) algorithm.
 
@@ -19,61 +23,68 @@ class IRGNMBase:
 
     Parameters
     ----------
-    operator : NonlinearOperator
-        The nonlinear operator F.
-    solver : App
-        The inner solver
-    maxiter : int, optional
-        Number of outer (Gauss-Newton) iterations (default is 10).
+    A : NonLinop
+        The nonlinear operator A.
+    y : ArrayLike
+        Observation.
+    x : ArrayLike
+        Variable.
+    max_iter : int, optional
+        Number of outer (Gauss-Newton) iterations (default is ``10``).
     alpha0 : float, optional
-        Initial regularization parameter (default is 1.0).
+        Initial regularization parameter (default is ``1.0``).
     q : float, optional
-        Decay factor for α per outer iteration (default is 2/3).
+        Decay factor for α per outer iteration (default is ``2/3``).
 
     """
 
-    def __init__(self, operator, solver, maxiter=10, alpha0=1.0, q=2 / 3):
-        self.operator = operator
-        self.solver = solver
-        self.maxiter = maxiter
+    def __init__(
+            self, 
+            A: NonLinop, 
+            b: ArrayLike, 
+            x: ArrayLike, 
+            max_iter: int = 10, 
+            alpha0: float = 1.0, 
+            q: float = 2 / 3
+        ):
+        self.A = A
+        self.b = b
+        self.x = x
         self.alpha0 = alpha0
         self.q = q
-
-    def run(self, y):
+        self.alpha_n = None
+        self.x0 = x.copy()
+        
+        super().__init__(max_iter)
+        
+    def setup_solver(self): # noqa
+        raise NotImplementedError
+        
+    def run_solver(self): # noqa
+        raise NotImplementedError
+    
+    def _update(self):
         """
-        Run the IRGNM algorithm to solve F(x) = y.
+        Run the IRGNM algorithm to solve A(x) = b.
 
         Parameters
         ----------
-        y : np.ndarray
+        b : np.ndarray
             Measured data in the data domain.
 
         Returns
         -------
         x : np.ndarray
             Final estimate after (optional) postprocessing.
+            
         """
-        x0 = self.init_func()
-        x = x0.copy()
+        self.alpha_n = self.alpha0 * (self.q**self.iter)
+        self.A.update(self.x)
+        self.setup_solver()
+        
+        # Perform inner loop
+        dx = self.run_solver()
+        
+        # Update solution
+        self.x = self.x + dx
 
-        for n in range(self.num_outer):
-            alpha_n = self.alpha0 * (self.q**n)
-            F_x = self.operator.evaluate(x)
-            r = y - F_x
-
-            def L(dx):
-                return (
-                    self.operator.derivative_adjoint(x, self.operator.derivative(x, dx))
-                    + alpha_n * dx
-                )
-
-            b = self.operator.derivative_adjoint(x, r) + alpha_n * (x0 - x)
-            dx = cg_solve(L, b, np.zeros_like(x), maxiter=self.cg_maxiter)
-            x = x + dx
-
-            res_norm = np.linalg.norm(b - L(dx))
-
-        if self.postprocess_func is not None:
-            return self.postprocess_func(x)
-        else:
-            return x
