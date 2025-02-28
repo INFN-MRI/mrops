@@ -65,8 +65,6 @@ class ConjugateGradient(App):
             leave_pbar: bool = True,
             record_time: bool = False,
         ):
-        if x is None:
-            x = 0 * b
         _alg = _ConjugateGradient(A, b, x, P, max_iter, tol)
         super().__init__(_alg, show_pbar, leave_pbar, record_time)
         
@@ -94,12 +92,21 @@ class _ConjugateGradient(Alg):
         super().__init__(max_iter)
 
     def update(self): # noqa
+        if self.x is None:
+            self.x = 0 * self.b
+            
+        # get shape
         shape = self.b.shape
-        self.x, _ = _cg(
+        
+        # actual run
+        self.x = _cg(
             self.A, self.b.ravel(), self.x.ravel(), atol=self.tol, maxiter=self.max_iter, M=self.P
         ) # here we let scipy/cupy handle steps.
+        
+        # reshape back
         self.b = self.b.reshape(*shape)
         self.x = self.x.reshape(*shape)
+        
         self._finished = True
 
     def _done(self):
@@ -109,6 +116,6 @@ class _ConjugateGradient(Alg):
 @with_numpy_cupy
 def _cg(A, b, x0, *, atol=0, maxiter=None, M=None):
     if get_array_module(b).__name__ == "numpy":
-        return scipy_cg(A, b, x0, atol=atol, maxiter=maxiter, M=M)
+        return scipy_cg(A, b, x0, atol=atol, maxiter=maxiter, M=M)[0]
     else:
-        return cupy_cg(A, b, x0, atol=atol, maxiter=maxiter, M=M)
+        return cupy_cg(A, b, x0, atol=atol, maxiter=maxiter, M=M)[0]

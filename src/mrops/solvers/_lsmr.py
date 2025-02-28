@@ -89,15 +89,21 @@ class _LSMR(Alg):
         super().__init__(max_iter)
 
     def update(self): # noqa
+        # get shape
         shape = self.b.shape
+        
+        # actual run
         self.x = _lsmr(
             self.A, self.b.ravel(), self.x, atol=self.tol, maxiter=self.max_iter,
         ) # here we let scipy/cupy handle steps.
+        
+        # reshape back
         self.b = self.b.reshape(*shape)
         if self.A.batched:
             self.x = self.x.reshape(self.A.batchsize, *self.A.ishape[1:])
         else:
             self.x = self.x.reshape(*self.A.ishape)
+            
         self._finished = True
 
     def _done(self):
