@@ -15,7 +15,7 @@ class FFT(Linop):
 
     Parameters
     ----------
-    shape : ArrayLike[int] | None, optional
+    shape : ArrayLike[int]
         Input shape. Use ``-1`` to enable broadcasting
         across a particular axis (e.g., ``(-1, Ny, Nx)``).
     axes :  ArrayLike[int] | None, optional
@@ -66,7 +66,7 @@ class IFFT(Linop):
 
     Parameters
     ----------
-    shape : ArrayLike[int] | None, optional
+    shape : ArrayLike[int]
         Input shape. Use ``-1`` to enable broadcasting
         across a particular axis (e.g., ``(-1, Ny, Nx)``).
     axes :  ArrayLike[int] | None, optional
