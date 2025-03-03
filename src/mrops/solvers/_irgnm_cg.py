@@ -49,6 +49,8 @@ class IrgnmCG(App):
          Tolerance for Conjugate Gradient stopping condition (default is ``0.0``).
     alpha0 : float, optional
         Initial regularization parameter (default is ``1.0``).
+    alpha_min : float, optional
+        Minimum regularization parameter (default is ``1e-6``).
     q : float, optional
         Decay factor for α per outer iteration (default is ``2/3``).
     show_pbar : bool, optional
@@ -69,12 +71,13 @@ class IrgnmCG(App):
         cg_iter: int = 10,
         cg_tol: float = 0.0,
         alpha0: float = 1.0,
+        alpha_min: float = 1e-6,
         q: float = 2 / 3,
         show_pbar: bool = False,
         leave_pbar: bool = True,
         record_time: bool = False,
     ):
-        _alg = _IrgnmCG(A, b, x, max_iter, cg_iter, cg_tol, alpha0, q)
+        _alg = _IrgnmCG(A, b, x, max_iter, cg_iter, cg_tol, alpha0, alpha_min, q)
         super().__init__(_alg, show_pbar, leave_pbar, record_time)
 
     def _output(self):
@@ -94,9 +97,10 @@ class _IrgnmCG(IrgnmBase):
         cg_iter: int = 10,
         cg_tol: float = 0.0,
         alpha0: float = 1.0,
+        alpha_min: float = 1e-6,
         q: float = 2 / 3,
     ):
-        super().__init__(A, b, x, max_iter, alpha0, q)
+        super().__init__(A, b, x, max_iter, alpha0, alpha_min, q)
         self.cg_iter = cg_iter
         self.cg_tol = cg_tol
 

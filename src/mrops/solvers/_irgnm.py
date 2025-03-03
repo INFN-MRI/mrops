@@ -17,7 +17,7 @@ class IrgnmBase(Alg):
 
     The method iteratively solves a linearized problem of the form
 
-        [F'(x)^H F'(x) + α I] dx = F'(x)^H (y - F(x)) + α (x0 - x),
+        [A'(x)^H A'(x) + α I] dx = A'(x)^H (y - A(x)) + α (x0 - x),
 
     and then updates x ← x + dx. Here α is a regularization parameter that decays
     over outer iterations.
@@ -26,7 +26,7 @@ class IrgnmBase(Alg):
     ----------
     A : NonLinop
         The nonlinear operator A.
-    y : ArrayLike
+    b : ArrayLike
         Observation.
     x : ArrayLike
         Variable.
@@ -34,6 +34,8 @@ class IrgnmBase(Alg):
         Number of outer (Gauss-Newton) iterations (default is ``10``).
     alpha0 : float, optional
         Initial regularization parameter (default is ``1.0``).
+    alpha_min : float, optional
+        Minimum regularization parameter (default is ``1e-6``).
     q : float, optional
         Decay factor for α per outer iteration (default is ``2/3``).
 
@@ -46,12 +48,14 @@ class IrgnmBase(Alg):
         x: ArrayLike,
         max_iter: int = 10,
         alpha0: float = 1.0,
+        alpha_min: float = 1e-6,
         q: float = 2 / 3,
     ):
         self.A = A
         self.b = b
         self.x = x
         self.alpha0 = alpha0
+        self.alpha_min = alpha_min
         self.q = q
         self.alpha_n = None
         self.x0 = x.copy()
@@ -79,7 +83,7 @@ class IrgnmBase(Alg):
             Final estimate after (optional) postprocessing.
 
         """
-        self.alpha_n = self.alpha0 * (self.q**self.iter)
+        self.alpha_n = max(self.alpha0 * (self.q**self.iter), self.alpha_min)
         self.A.update(self.x)
         self.setup_solver()
 

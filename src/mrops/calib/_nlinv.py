@@ -25,11 +25,13 @@ def nlinv_calib(
     coords: ArrayLike | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-3,
+    sobolev_width: int = 32,
     ell: int = 16,
     max_iter: int = 10,
     cg_iter: int = 10,
     cg_tol: float = 0.0,
     alpha0: float = 1.0,
+    alpha_min: float = 1e-6,
     q: float = 2 / 3,
     show_pbar: bool = False,
     leave_pbar: bool = True,
@@ -53,8 +55,29 @@ def nlinv_calib(
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
         Used only for Non Cartesian Datasets.
+    sobolev_width : int, optional
+        Sobolev kernel width, i.e., matrix size of the k-space
+        region containing expected coil frequences. The default is ``32``.
     ell : int, optional
         Sobolev norm order for regularization. The default is ``16``.
+    max_iter : int, optional
+        Number of outer (Gauss-Newton) iterations (default is ``10``).
+    cg_iter : int, optional
+        Number of inner (Conjugate Gradient) iterations (default is ``10``).
+    cg_tol : float, optional
+         Tolerance for Conjugate Gradient stopping condition (default is ``0.0``).
+    alpha0 : float, optional
+        Initial regularization parameter (default is ``1.0``).
+    alpha_min : float, optional
+        Minimum regularization parameter (default is ``1e-6``).
+    q : float, optional
+        Decay factor for α per outer iteration (default is ``2/3``).
+    show_pbar : bool, optional
+        Toggle whether show progress bar (default is ``False``).
+    leave_pbar : bool, optional
+        Toggle whether to leave progress bar after finished (default is ``True``).
+    record_time : bool, optional
+        Toggle wheter record runtime (default is ``False``).
 
     Returns
     -------
@@ -69,18 +92,20 @@ def nlinv_calib(
     n_coils = y.shape[0]
 
     # Pre-normalize data
-    y = y / (y * y.conj()).sum() ** 0.5
+    y = 100.0 * y / (y * y.conj()).sum() ** 0.5
 
     # Determine type of acquisition
     if coords is None:  # Cartesian
         shape = y.shape[1:]
-        nlinv = NlinvOp(device, n_coils, shape, ell=ell)
+        nlinv = NlinvOp(device, n_coils, shape, sobolev_width=sobolev_width, ell=ell)
     else:  # Non Cartesian
         if shape is None:
             shape = estimate_shape(coords)
         if get_device(coords).id >= 0:
             coords = coords.get()
-        nlinv = NlinvOp(device, n_coils, shape, coords, oversamp, eps, ell)
+        nlinv = NlinvOp(
+            device, n_coils, shape, coords, oversamp, eps, sobolev_width, ell
+        )
 
     # Enforce shape as list
     if isinstance(shape, xp.ndarray):
@@ -91,10 +116,13 @@ def nlinv_calib(
     # Initialize guess
     if device.id >= 0:
         with device:
-            xhat0 = xp.zeros((n_coils + 1, *shape), dtype=y.dtype)
+            x0 = xp.zeros((n_coils + 1, *shape), dtype=y.dtype)
     else:
-        xhat0 = xp.zeros((n_coils + 1, *shape), dtype=y.dtype)
-    xhat0[0] = 1.0
+        x0 = xp.zeros((n_coils + 1, *shape), dtype=y.dtype)
+    x0[0] = 1.0
+
+    # Calculate xhat0
+    xhat0 = nlinv.W.H.apply(x0)
 
     # Run algorithm
     xhat = IrgnmCG(
@@ -105,6 +133,7 @@ def nlinv_calib(
         cg_iter,
         cg_tol,
         alpha0,
+        alpha_min,
         q,
         show_pbar,
         leave_pbar,
@@ -146,6 +175,9 @@ class NlinvOp(NonLinop):
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
+    kw : int, optional
+        Sobolev kernel width, i.e., matrix size of the k-space
+        region containing expected coil frequences. The default is ``32``.
     ell : int, optional
         Sobolev norm order for regularization. The default is ``16``.
 
@@ -159,6 +191,7 @@ class NlinvOp(NonLinop):
         coords: ArrayLike | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
+        kw: int = 32,
         ell: int = 16,
     ):
         self.device = device
@@ -169,22 +202,21 @@ class NlinvOp(NonLinop):
         self.F = self._get_fourier_op(coords, oversamp, eps)
 
         # Compute the k-space weighting operator W
-        self.weight = self._get_weighting_op(ell)
-        self.W = self.weight * self._get_cartesian_fft_op()
+        self.W = self._get_weighting_op(kw, ell)
 
         super().__init__()
 
-    def _compute_forward(self, x):
+    def _compute_forward(self, xhat):
         """
-        Compute the forward operator G_n(x) for MRI encoding.
+        Compute the forward operator G_n(xhat) for MRI encoding.
 
         Returns
         -------
         linop.Linop
-            Forward model G_n(x) as a matrix-free linear operator.
+            Forward model G_n(xhat) as a matrix-free linear operator.
 
         """
-        C = self.W.apply(x)[1:]  # Coil sensitivity maps
+        C = self.W.apply(xhat)[1:]  # Coil sensitivity maps
 
         # Get single coil Encoding operator (FFT or NUFFT)
         F = self.F
@@ -194,15 +226,16 @@ class NlinvOp(NonLinop):
 
         return G_n
 
-    def _compute_jacobian(self, x):
+    def _compute_jacobian(self, xhat):
         """
-        Compute the Jacobian operator dF(x).
+        Compute the Jacobian operator dG_n(xhat).
 
         Returns
         -------
         sp.linop.Linop
             SigPy linear operator representing the Jacobian.
         """
+        x = self.W.apply(xhat)  # Coil sensitivity maps
         M = x[0]
         C = x[1:]
 
@@ -237,12 +270,14 @@ class NlinvOp(NonLinop):
 
         return DG_n
 
-    def _get_weighting_op(self, ell):
+    def _get_weighting_op(self, kw, ell):
         """
         Compute the k-space weighting operator W.
 
         Parameters
         ----------
+        kw : int
+            Sobolev kernel width.
         ell : int
             Order of the Sobolev norm.
 
@@ -252,29 +287,33 @@ class NlinvOp(NonLinop):
             SigPy linear operator representing the k-space weighting.
 
         """
-        xp = self.device.xp
         eye = linop.Identity((1,) + tuple(self.matrix_size.tolist()))
+
+        # Get weighting
+        xp = self.device.xp
         with self.device:
             kgrid = xp.meshgrid(
-                *[xp.fft.fftfreq(n) for n in tuple(self.matrix_size.tolist())],
+                *[
+                    xp.arange(-n // 2, n // 2, dtype=xp.float32) / n
+                    for n in tuple(self.matrix_size.tolist())
+                ],
                 indexing="ij",
             )
-        k_norm = sum(ki**2 for ki in kgrid) ** 0.5
-        w = (1 + k_norm) ** (ell / 2)  # l = 16 in the paper
-        w = linop.Multiply((self.n_coils,) + tuple(self.matrix_size.tolist()), w)
+        k_norm = sum(ki**2 for ki in kgrid)
+        w = linop.Multiply(
+            (self.n_coils,) + tuple(self.matrix_size.tolist()),
+            1.0 / (1 + kw * k_norm) ** (ell / 2),
+        )
+        weight = linop.Diag([eye, w], iaxis=0, oaxis=0)
 
-        return linop.Diag([eye, w], iaxis=0, oaxis=0)
-
-    def _get_cartesian_fft_op(self):
-        # Determine number of spatial dimensions (ignoring coil dimension)
+        # Get cartesian FFT
         spatial_dims = len(self.matrix_size)
         fft_axes = tuple(range(-spatial_dims, 0))  # Last dimensions are spatial
         fourier = FFT((self.n_coils,) + tuple(self.matrix_size.tolist()), axes=fft_axes)
+        fourier = linop.Diag([eye, fourier], iaxis=0, oaxis=0)
 
-        # Append identity in front
-        eye = linop.Identity((1,) + tuple(self.matrix_size.tolist()))
-
-        return linop.Diag([eye, fourier], iaxis=0, oaxis=0)
+        # Build low pass filtering
+        return fourier.H * weight
 
     def _get_fourier_op(self, coords, oversamp, eps):
         """
@@ -296,7 +335,11 @@ class NlinvOp(NonLinop):
 
         """
         if coords is None:
-            return self._get_cartesian_fft_op()
+            spatial_dims = len(self.matrix_size)
+            fft_axes = tuple(range(-spatial_dims, 0))  # Last dimensions are spatial
+            return FFT(
+                (self.n_coils,) + tuple(self.matrix_size.tolist()), axes=fft_axes
+            )
         else:
             return NUFFT(
                 (self.n_coils,) + tuple(self.matrix_size.tolist()),
@@ -304,17 +347,3 @@ class NlinvOp(NonLinop):
                 oversamp,
                 eps,
             )
-
-    def get_weighting_op(self):
-        """
-        Return the k-space weighting operator W.
-
-        This can be used externally for pre-processing initial guesses
-        or post-processing the final solution.
-
-        Returns
-        -------
-        sp.linop.Linop
-            The k-space weighting operator.
-        """
-        return self.W
