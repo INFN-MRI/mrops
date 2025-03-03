@@ -550,7 +550,6 @@ def spsolve(A, b):
 
 
 class SuperLU:
-
     def __init__(self, obj):
         """LU factorization of a sparse matrix.
 
@@ -648,7 +647,6 @@ class SuperLU:
 
 
 class CusparseLU(SuperLU):
-
     def __init__(self, a):
         """Incomplete LU factorization of a sparse matrix.
 
@@ -939,7 +937,6 @@ def minres(
     r2 = r1
 
     while itn < maxiter:
-
         itn += 1
         s = 1.0 / beta
         v = s * y

@@ -24,7 +24,17 @@ def MulticoilOp(encoding: linop.Linop, smaps: ArrayLike, batched: bool = False):
         Multi-coil enabled encoding operator.
 
     """
+    squeeze = linop.Reshape(encoding.ishape, (1,) + tuple(encoding.ishape))
+    unsqueeze = linop.Reshape((1,) + tuple(encoding.oshape), encoding.oshape)
+
+    # encoding
+    nmaps = smaps.shape[0]
+    F = linop.Diag(nmaps * [unsqueeze * encoding * squeeze], iaxis=0, oaxis=0)
+
+    # sensitivity
     shape = smaps.shape[1:]
-    return linop.Vstack(
-        [encoding * linop.Multiply(shape, smap) for smap in smaps], axis=0
+    S = linop.Vstack(
+        [squeeze.H * linop.Multiply(shape, smap) for smap in smaps], axis=0
     )
+
+    return F * S
