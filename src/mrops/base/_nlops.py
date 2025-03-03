@@ -36,8 +36,8 @@ class NonLinop(abc.ABC):
             Initial guess for the variable x.
         """
         self.x = None
-        self.F_x = None
-        self.DF_x = None
+        self.F_n = None
+        self.DF_n = None
 
     def update(self, x_new):
         """
@@ -50,8 +50,8 @@ class NonLinop(abc.ABC):
             New point where the nonlinear operator should be evaluated.
         """
         self.x = x_new
-        self.F_x = self._compute_forward(x_new)
-        self.DF_x = self._compute_jacobian(x_new)
+        self.F_n = self._compute_forward(x_new)
+        self.DF_n = self._compute_jacobian(x_new)
 
     def forward(self):
         """
@@ -62,7 +62,7 @@ class NonLinop(abc.ABC):
         sp.linop.Linop
             The forward operator evaluated at the last update point.
         """
-        return self.F_x
+        return self.F_n
 
     def jacobian(self):
         """
@@ -73,7 +73,7 @@ class NonLinop(abc.ABC):
         sp.linop.Linop
             The Jacobian operator evaluated at the last update point.
         """
-        return self.DF_x
+        return self.DF_n
 
     @abc.abstractmethod
     def _compute_forward(self, x):

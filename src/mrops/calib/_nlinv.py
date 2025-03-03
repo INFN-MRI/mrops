@@ -92,7 +92,7 @@ def nlinv_calib(
     n_coils = y.shape[0]
 
     # Pre-normalize data
-    y = 100.0 * y / (y * y.conj()).sum() ** 0.5
+    y = 100 * y / (y * y.conj()).sum() ** 0.5
 
     # Determine type of acquisition
     if coords is None:  # Cartesian
@@ -182,7 +182,6 @@ class NlinvOp(NonLinop):
         Sobolev norm order for regularization. The default is ``16``.
 
     """
-
     def __init__(
         self,
         device: str,
@@ -222,9 +221,7 @@ class NlinvOp(NonLinop):
         F = self.F
 
         # Get multicoil Encoding operator: A_n = F * S_n
-        G_n = MulticoilOp(F, C)
-
-        return G_n
+        return MulticoilOp(F, C)
 
     def _compute_jacobian(self, xhat):
         """
@@ -266,9 +263,7 @@ class NlinvOp(NonLinop):
                     )
                 )
             )
-        DG_n = linop.Vstack(DF_n, axis=0) * self.W
-
-        return DG_n
+        return linop.Vstack(DF_n, axis=0) * self.W
 
     def _get_weighting_op(self, kw, ell):
         """
