@@ -55,10 +55,10 @@ def nlinv_python(y, mask, niter):
         alpha = alpha0 * (2/3)**n
         
         # Update operators
-        _nlinv.update(x)
+        _nlinv.update(xhat)
         
         # Calculate RHS
-        r = _nlinv.DF_n.H.apply(y - _nlinv.F_n.apply(x[0])) + alpha * (xhat0 - xhat)
+        r = _nlinv.DF_n.H.apply(y - _nlinv.F_n.apply(xhat[0])) + alpha * (xhat0 - xhat)
         
         # Calculate CG square matrix operator
         A =  _nlinv.DF_n.H * _nlinv.DF_n + alpha * linop.Identity(_nlinv.DF_n.H.oshape)
@@ -90,15 +90,17 @@ def nlinv_python(y, mask, niter):
         # End CG
         xhat += z
         
-        # Apply weights to XN (excluding first component)
-        x = _nlinv.W(xhat)
-
     # Post-processing
-    # x = _nlinv.W(xhat)
-    x[0] = x[0] * (x[1:].conj() * x[1:]).sum(axis=0)**0.5
-    x = x / yscale
+    x = _nlinv.W(xhat) / yscale
+    
+    # Split output
+    rho = x[0]
+    smaps = x[1:]
+    
+    # Normalize
+    rho = rho * (smaps.conj() * smaps).sum(axis=0)**0.5
 
-    return x[1:], x[0] # (smaps, rho)
+    return smaps, rho
 
 
 def simu(x, y):
@@ -218,13 +220,13 @@ class BaseNlinvOp(NonLinop):
         W = linop.Multiply(shape, weights)
         return FH * W
     
-    def _compute_forward(self, x):
+    def _compute_forward(self, xhat):
         """Create forward model operator."""
-        # x = self.W(xhat)
+        x = self.W(xhat)
         smaps = x[1:]        
-        return MulticoilOp(self._PF, smaps)# * self._W
+        return MulticoilOp(self._PF, smaps)
     
-    def _compute_jacobian(self, x):
+    def _compute_jacobian(self, xhat):
         """Compute derivative of forward operator."""
         try:
             shape = tuple(self.matrix_size.tolist())
@@ -232,7 +234,7 @@ class BaseNlinvOp(NonLinop):
             shape = tuple(self.matrix_size)
         
         # Split input
-        # x = self.W(xhat)
+        x = self.W(xhat)
         rho = x[0]
         smaps = x[1:]
         n_coils = smaps.shape[0]
