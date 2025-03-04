@@ -92,7 +92,7 @@ def nlinv_calib(
     n_coils = y.shape[0]
 
     # Pre-normalize data
-    y = 100 * y / (y * y.conj()).sum() ** 0.5
+    y = y / (y * y.conj()).sum() ** 0.5
 
     # Determine type of acquisition
     if coords is None:  # Cartesian
@@ -146,7 +146,10 @@ def nlinv_calib(
     # Post processing
     smaps = x[1:]
     rho = x[0]
-    rho = rho * (smaps.conj() * smaps).sum(axis=0) ** 0.5
+    
+    rss = (smaps.conj() * smaps).sum(axis=0) ** 0.5
+    rho = rho * rss
+    smaps = smaps / rss # like SigPy
 
     return smaps, rho
 
