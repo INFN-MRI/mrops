@@ -1,10 +1,10 @@
 """Porting of original MATLAB implementation of NLINV"""
 
-__all__ = ["nlinv", "simu"]
+__all__ = ["nlinv_matlab", "simu"]
 
 import numpy as np
 
-def nlinv(Y, n):
+def nlinv_matlab(Y, n):
     """
     Nonlinear inversion for parallel MRI reconstruction.
 
@@ -139,7 +139,7 @@ def simu(x, y):
     P[:, (y // 2 - 8):(y // 2 + 8)] = 1.  # Center region
 
     # Simulate k-space data
-    return op(P, X)
+    return op(P, X), P
 
 # %% utils
 def myfft(x):
@@ -294,3 +294,5 @@ def derH(P, W, X0, DK):
         DX[..., 0, :, :] += K * np.conj(X0[..., i + 1, :, :])
         DX[..., i + 1, :, :] = apweightsH(W, K * np.conj(X0[..., 0, :, :]))
     return DX
+
+
