@@ -27,6 +27,7 @@ def nlinv_calib(
     mask: ArrayLike | None = None,
     shape: ArrayLike | None = None,
     coords: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-3,
     sobolev_width: int = 200,
@@ -59,6 +60,9 @@ def nlinv_calib(
         Used for Non Cartesian only.
     coords : ArrayLike, optional
         k-space trajectory for NUFFT (``None`` for Cartesian).
+    weights : ArrayLike, optional
+        k-space density compensation factors for NUFFT (``None`` for Cartesian).
+        If not provided, does not perform density compensation.
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
         Used for Non Cartesian only.
@@ -147,24 +151,42 @@ def nlinv_calib(
         if get_device(coords).id >= 0:
             coords = coords.get()
 
-        # Check number of slices
-        if len(y.shape) == len(coords.shape):
-            n_slices = 1
-        else:
-            n_slices = y.shape[1]
-
-        # Work in 3D kspace
+        # Get number of dimensions
         ndim = coords.shape[-1]
-        if ndim == 2 and n_slices != 1:
-            y = fft(y, axes=(-3,), norm="ortho")
-        elif ndim == 2:
-            coord_z = np.arange(-n_slices // 2, n_slices // 2, dtype=coords.dtype)
-            coord_z = np.broadcast_to(coord_z, coords.shape[:-1])[..., None]
-            coords = np.concatenate((coords, coord_z), axis=-1)
+
+        # Check number of slices
+        if ndim == 2:
+            if len(y.shape) == len(coords.shape):
+                n_slices = 1
+            else:
+                n_slices = y.shape[1]
+
+            # Work in 3D kspace
+            if n_slices != 1:
+                y = fft(y, axes=(-3,), norm="ortho")
+                coord_z = np.arange(-n_slices // 2, n_slices // 2, dtype=coords.dtype)
+                coord_z = np.broadcast_to(coord_z, coords.shape[:-1])[..., None]
+                coords = np.concatenate((coords, coord_z), axis=-1)
+
+                shape = (n_slices,) + tuple(shape[-2:])
+            else:
+                shape = tuple(shape[-2:])
+
+        # If weights are provided, pre-weight k-space data
+        if weights is not None:
+            y = weights**0.5 * y
 
         # Build operator
         _nlinv = NonCartesianNlinvOp(
-            device, n_coils, shape, coords, oversamp, eps, sobolev_width, sobolev_deg
+            device,
+            n_coils,
+            shape,
+            coords,
+            weights,
+            oversamp,
+            eps,
+            sobolev_width,
+            sobolev_deg,
         )
 
     # Enforce shape as list
@@ -199,65 +221,6 @@ def nlinv_calib(
         show_pbar,
         leave_pbar,
         record_time,
-    ).run()
-
-    # Post-processing
-    x = _nlinv.W(xhat) / yscale
-
-    # Split output
-    rho = x[0]
-    smaps = x[1:]
-
-    # Normalize
-    rho = rho * (smaps.conj() * smaps).sum(axis=0) ** 0.5
-
-    return smaps, rho
-
-
-def nlinv_python(y, mask, niter):
-    """
-    Nonlinear inversion for parallel MRI reconstruction.
-
-    Parameters
-    ----------
-    Y : ndarray (c, y, x)
-        k-space measurements.
-    n : int
-        Number of nonlinear iterations.
-
-    Returns
-    -------
-    R : ndarray (n, y, x)
-        Reconstructed images.
-    """
-    alpha0 = 1.0
-    nc, ny, nx = y.shape
-
-    # Initialization of x-vector
-    xhat0 = np.zeros((nc + 1, ny, nx), dtype=np.complex64)
-    xhat0[0] = 1.0  # Object part
-
-    # Initialize Nlinv operator
-    _nlinv = CartesianNlinvOp(get_device(y), nc, mask)
-
-    # Normalize data vector
-    yscale = 100.0 / np.linalg.norm(y)
-    y = y * yscale
-
-    # Run algorithm
-    xhat = IrgnmCG(
-        _nlinv,
-        y,
-        xhat0,
-        niter,
-        10,
-        1e-2,
-        alpha0,
-        0.0,
-        2 / 3,
-        # show_pbar,
-        # leave_pbar,
-        # record_time,
     ).run()
 
     # Post-processing
@@ -464,23 +427,33 @@ class NonCartesianNlinvOp(BaseNlinvOp):
         n_coils: int,
         matrix_size: ArrayLike,
         coords: ArrayLike | None = None,
+        weights: ArrayLike | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
         kw: int = 220.0,
         ell: int = 32,
     ):
         super().__init__(device, n_coils, matrix_size, kw, ell)
-        self._PF = self._get_fourier_op(coords, oversamp, eps)
+        self._PF = self._get_fourier_op(coords, weights, oversamp, eps)
 
-    def _get_fourier_op(self, coords, oversamp, eps):
+    def _get_fourier_op(self, coords, weights, oversamp, eps):
         try:
             shape = tuple(self.matrix_size.tolist())
         except Exception:
             shape = tuple(self.matrix_size)
 
-        return NUFFT(
+        # NUFFT
+        F = NUFFT(
             (self.n_coils,) + shape,
             coords,
             oversamp,
             eps,
         )
+
+        # Preconditioning
+        if weights is not None:
+            DCF = linop.Multiply(F.oshape, weights**0.5)
+        else:
+            DCF = linop.Identity(F.oshape)
+
+        return DCF * F  # so that Fadj(input) = NUFFT(DCF(input))
