@@ -4,6 +4,7 @@ __all__ = ["nlinv_matlab", "simu"]
 
 import numpy as np
 
+
 def nlinv_matlab(Y, n):
     """
     Nonlinear inversion for parallel MRI reconstruction.
@@ -28,14 +29,14 @@ def nlinv_matlab(Y, n):
 
     # Initialization of x-vector
     X0 = np.zeros((c + 1, y, x), dtype=np.complex64)
-    X0[0] = 1.  # Object part
+    X0[0] = 1.0  # Object part
 
     # Initialize mask and weights
     P = pattern(Y)
     W = weights(x, y)
 
     # Normalize data vector
-    yscale = 100. / np.sqrt(np.vdot(Y, Y))
+    yscale = 100.0 / np.sqrt(np.vdot(Y, Y))
     YS = Y * yscale
 
     XN = np.zeros_like(X0)
@@ -79,7 +80,7 @@ def nlinv_matlab(Y, n):
 
             print("CG residuum:", dnew / dnot)
 
-            if np.sqrt(dnew) < 1.e-2 * dnot:
+            if np.sqrt(dnew) < 1.0e-2 * dnot:
                 break
 
         # End CG
@@ -87,7 +88,7 @@ def nlinv_matlab(Y, n):
         print(np.sqrt(np.vdot(z, z)))
         print(np.sqrt(np.vdot(XN, XN)))
 
-        alpha /= 3.
+        alpha /= 3.0
 
         # Post-processing
         C = np.zeros((y, x), dtype=np.complex64)
@@ -120,7 +121,7 @@ def simu(x, y):
     d = ((i / y) - 0.5) ** 2 + ((j / x) - 0.5) ** 2
 
     # Object
-    X[0, d < 0.4 ** 2] = 1.0
+    X[0, d < 0.4**2] = 1.0
 
     # Coil sensitivities
     d1 = ((i / y) - 1.0) ** 2 + ((j / x) - 0.0) ** 2
@@ -135,20 +136,23 @@ def simu(x, y):
 
     # Undersampling pattern
     P = np.zeros((y, x))
-    P[:, ::2] = 1.  # Every other column
-    P[:, (y // 2 - 8):(y // 2 + 8)] = 1.  # Center region
+    P[:, ::2] = 1.0  # Every other column
+    P[:, (y // 2 - 8) : (y // 2 + 8)] = 1.0  # Center region
 
     # Simulate k-space data
     return op(P, X), P
+
 
 # %% utils
 def myfft(x):
     """Apply FFT with correct shifting."""
     return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(x), norm="ortho"))
 
+
 def myifft(x):
     """Apply IFFT with correct shifting."""
     return np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(x), norm="ortho"))
+
 
 def pattern(Y):
     """
@@ -165,6 +169,7 @@ def pattern(Y):
         Sampling pattern.
     """
     return np.sum(np.abs(Y) ** 2, axis=-3) > 0
+
 
 def weights(y, x):
     """
@@ -184,6 +189,7 @@ def weights(y, x):
     d = ((i / y) - 0.5) ** 2 + ((j / x) - 0.5) ** 2
     return 1.0 / (1.0 + 220.0 * d) ** 16
 
+
 def apweights(W, CT):
     """
     Apply k-space weighting.
@@ -202,6 +208,7 @@ def apweights(W, CT):
     """
     return myifft(W * CT)
 
+
 def apweightsH(W, CT):
     """
     Apply adjoint k-space weighting.
@@ -219,6 +226,7 @@ def apweightsH(W, CT):
         Adjoint-weighted output.
     """
     return np.conj(W) * myfft(CT)
+
 
 def op(P, X):
     """
@@ -240,6 +248,7 @@ def op(P, X):
     for i in range(X.shape[-3] - 1):
         K[..., i, :, :] = P * myfft(X[..., 0, :, :] * X[..., i + 1, :, :])
     return K
+
 
 def der(P, W, X0, DX):
     """
@@ -268,6 +277,7 @@ def der(P, W, X0, DX):
         K[..., i, :, :] = P * myfft(K[..., i, :, :])
     return K
 
+
 def derH(P, W, X0, DK):
     """
     Compute adjoint derivative.
@@ -294,5 +304,3 @@ def derH(P, W, X0, DK):
         DX[..., 0, :, :] += K * np.conj(X0[..., i + 1, :, :])
         DX[..., i + 1, :, :] = apweightsH(W, K * np.conj(X0[..., 0, :, :]))
     return DX
-
-

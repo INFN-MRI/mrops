@@ -42,6 +42,7 @@ class NonLinop(abc.ABC):
     def update(self, x_new):
         """
         Update the nonlinear operator at a new point x_new.
+
         This forces recalculation of the forward operator F(x) and its Jacobian dF(x).
 
         Parameters
@@ -55,7 +56,7 @@ class NonLinop(abc.ABC):
 
     def forward(self):
         """
-        Returns the current forward operator F(x) as a SigPy Linop.
+        Return the current forward operator F(x) as a SigPy Linop.
 
         Returns
         -------
@@ -66,7 +67,7 @@ class NonLinop(abc.ABC):
 
     def jacobian(self):
         """
-        Returns the current Jacobian operator dF(x) as a SigPy Linop.
+        Return the current Jacobian operator dF(x) as a SigPy Linop.
 
         Returns
         -------

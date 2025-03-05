@@ -11,6 +11,7 @@ from mrinufft._array_compat import CUPY_AVAILABLE
 if CUPY_AVAILABLE:
     import cupy as cp
 
+from .._sigpy import get_array_module, get_device
 from .._sigpy.app import App
 from .._sigpy.linop import Identity
 from ..base import NonLinop
@@ -68,10 +69,10 @@ class IrgnmCG(App):
         b: ArrayLike,
         x: ArrayLike,
         max_iter: int = 10,
-        cg_iter: int = 10,
-        cg_tol: float = 0.0,
+        cg_iter: int = 20,
+        cg_tol: float = 1e-2,
         alpha0: float = 1.0,
-        alpha_min: float = 1e-6,
+        alpha_min: float = 0.0,
         q: float = 2 / 3,
         show_pbar: bool = False,
         leave_pbar: bool = True,
@@ -94,10 +95,10 @@ class _IrgnmCG(IrgnmBase):
         b: ArrayLike,
         x: ArrayLike,
         max_iter: int = 10,
-        cg_iter: int = 10,
-        cg_tol: float = 0.0,
+        cg_iter: int = 20,
+        cg_tol: float = 1e-2,
         alpha0: float = 1.0,
-        alpha_min: float = 1e-6,
+        alpha_min: float = 0.0,
         q: float = 2 / 3,
     ):
         super().__init__(A, b, x, max_iter, alpha0, alpha_min, q)
@@ -110,13 +111,23 @@ class _IrgnmCG(IrgnmBase):
 
         # Setup rhs (right hand side)
         b = DGn.H.apply(self.b - Gn.apply(self.x[0])) + self.alpha_n * (
-            self.x - self.x0
+            self.x0 - self.x
         )
 
         # Setup Operator
         A = DGn.H * DGn + self.alpha_n * Identity(DGn.H.oshape)
 
-        self.solver = ConjugateGradient(A, b, max_iter=self.cg_iter, tol=self.cg_tol)
+        # Initialize CG variables
+        device = get_device(self.x)
+        if device.id >= 0:
+            with device:
+                dx0 = device.xp.zeros_like(self.x)
+        else:
+            dx0 = device.xp.zeros_like(self.x)
+
+        self.solver = ConjugateGradient(
+            A, b, dx0, max_iter=self.cg_iter, tol=self.cg_tol
+        )
 
     def run_solver(self):  # noqa
         return self.solver.run()  # return dx
