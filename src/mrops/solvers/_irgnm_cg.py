@@ -11,7 +11,7 @@ from mrinufft._array_compat import CUPY_AVAILABLE
 if CUPY_AVAILABLE:
     import cupy as cp
 
-from .._sigpy import get_array_module, get_device
+from .._sigpy import get_device
 from .._sigpy.app import App
 from .._sigpy.linop import Identity
 from ..base import NonLinop

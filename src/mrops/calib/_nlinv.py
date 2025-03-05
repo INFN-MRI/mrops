@@ -11,7 +11,7 @@ from ..base import NonLinop
 from mrinufft._array_compat import with_numpy_cupy
 from mrinufft._array_compat import get_array_module
 
-from .._sigpy import get_device, fft
+from .._sigpy import get_device, fft, ifft, resize
 from .._sigpy import linop
 from .._sigpy import estimate_shape
 
@@ -23,6 +23,7 @@ from ..solvers import IrgnmCG
 @with_numpy_cupy
 def nlinv_calib(
     y: ArrayLike,
+    cal_shape: int | None = None,
     ndim: int | None = None,
     mask: ArrayLike | None = None,
     shape: ArrayLike | None = None,
@@ -49,6 +50,8 @@ def nlinv_calib(
     ----------
     y : ArrayLike
         Measured k-space data of shape ``(n_coils, ...)``
+    cal_shape : int
+        Size of k-space calibration shape, assuming isotropic matrix.
     ndim : int, optional
         Acquisition dimensionality (2D or 3D). Used for Cartesian only.
     mask : ArrayLike, optional
@@ -97,7 +100,9 @@ def nlinv_calib(
     -------
     smaps : ArrayLike
         Coil sensitivity maps of shape ``(n_coils, *shape)``
-    image : ArrayLike
+    acr : ArrayLike
+        Autocalibration k-space region of shape ``(n_coils, *cal_shape)``
+    image : ArrayLike, optional
         Reconstructed magnetization of shape ``(*shape)``
 
     """
@@ -107,6 +112,8 @@ def nlinv_calib(
 
     # Determine type of acquisition
     if coords is None:  # Cartesian
+        NONCART = False
+
         # Check number of dimensions
         if ndim is None:
             raise ValueError(
@@ -125,6 +132,25 @@ def nlinv_calib(
         if ndim == 2 and n_slices != 1:
             y = fft(y, axes=(-3,), norm="ortho")
 
+        # Get shape (squeeze if n_slices = 1)
+        if n_slices != 1:
+            ishape = (n_slices,) + tuple(y.shape[-2:])
+        else:
+            ishape = tuple(y.shape[-2:])
+
+        # Select calibration region
+        if cal_shape is None:
+            cal_shape = ishape
+        else:
+            cal_shape = ndim * [cal_shape]
+
+        # Get actual matrix
+        shape = list(ishape)
+        for i in range(
+            1, len(cal_shape) + 1
+        ):  # Iterate over the last len(cal_shape) axes
+            shape[-i] = min(int(ishape[-i]), int(cal_shape[-i]))  # Take the minimum
+
         # Handle mask
         if mask is None:
             if ndim == 2:
@@ -136,20 +162,23 @@ def nlinv_calib(
             mask = mask > 0
         mask = mask.astype(xp.float32)
 
-        # Get shape (squeeze if n_slices = 1)
-        if n_slices != 1:
-            shape = (n_slices,) + tuple(y.shape[-2:])
-        else:
-            shape = tuple(y.shape[-2:])
+        # Resize
+        y = resize(y, shape)
+        mask = resize(mask, shape[-mask.ndim :])
 
         # Build operator
         _nlinv = CartesianNlinvOp(device, n_coils, mask, sobolev_width, sobolev_deg)
 
     else:  # Non Cartesian
-        if shape is None:
-            shape = estimate_shape(coords)
+        NONCART = True
         if get_device(coords).id >= 0:
             coords = coords.get()
+
+        # Get shape (squeeze if n_slices = 1)
+        if shape is None:
+            ishape = estimate_shape(coords)
+        else:
+            ishape = shape
 
         # Get number of dimensions
         ndim = coords.shape[-1]
@@ -168,12 +197,43 @@ def nlinv_calib(
                 coord_z = np.broadcast_to(coord_z, coords.shape[:-1])[..., None]
                 coords = np.concatenate((coords, coord_z), axis=-1)
 
-                shape = (n_slices,) + tuple(shape[-2:])
+                ishape = (n_slices,) + tuple(ishape[-2:])
             else:
-                shape = tuple(shape[-2:])
+                ishape = tuple(ishape[-2:])
+
+        # Select calibration region
+        if cal_shape is None:
+            osf = 1
+            cal_shape = ishape
+        else:
+            osf = 2**0.5
+            cal_shape = ndim * [cal_shape]
+
+        # Get actual matrix
+        shape = list(ishape)
+        for i in range(
+            1, len(cal_shape) + 1
+        ):  # Iterate over the last len(cal_shape) axes
+            shape[-i] = min(
+                int(ishape[-i]), int(np.ceil(osf * cal_shape[-i]))
+            )  # Take the minimum
+
+        # Now select data
+        idx = np.stack([abs(coords[..., n]) < (shape[n] // 2) for n in range(ndim)])
+        idx = np.prod(idx, axis=0).astype(bool)
+
+        # Actual selection
+        coords = coords[idx, :]
+        y = y[:, idx]
+
+        # Rescale trajectory
+        coords_scale = np.asarray(ishape[-ndim:]) / np.asarray(shape[-ndim:])
+        coords = 2 * np.pi * coords / np.asarray(ishape[-ndim:])
+        coords = coords_scale * coords
 
         # If weights are provided, pre-weight k-space data
         if weights is not None:
+            weights = weights[idx]
             y = weights**0.5 * y
 
         # Build operator
@@ -231,9 +291,28 @@ def nlinv_calib(
     smaps = x[1:]
 
     # Normalize
-    rho = rho * (smaps.conj() * smaps).sum(axis=0) ** 0.5
+    rss = (smaps.conj() * smaps).sum(axis=0) ** 0.5
+    rho = rho * rss
+    # smaps = smaps / rss
 
-    return smaps, rho
+    # Get reference phase
+    phref = smaps[0] / abs(smaps[0])
+    smaps = phref.conj() * smaps
+
+    # Get GRAPPA training data
+    ft_axes = tuple(range(-rho.ndim, 0))
+    grappa_train = fft(smaps * rho, axes=ft_axes, norm="ortho")
+    if NONCART:  # Cut corners
+        grappa_shape = list(grappa_train.shape[: -len(cal_shape)]) + list(cal_shape)
+        grappa_train = resize(grappa_train, grappa_shape)
+
+    # Resize to correct shape
+    smaps_shape = [smaps.shape[0]] + list(ishape[-smaps.ndim - 1 :])
+    smaps = fft(smaps, axes=ft_axes, norm="ortho")
+    smaps = resize(smaps, smaps_shape)
+    smaps = ifft(smaps, axes=ft_axes, norm="ortho")
+
+    return smaps, grappa_train, rho
 
 
 def simu(x, y):
@@ -448,6 +527,7 @@ class NonCartesianNlinvOp(BaseNlinvOp):
             coords,
             oversamp,
             eps,
+            normalize_coord=False,
         )
 
         # Preconditioning

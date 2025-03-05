@@ -31,6 +31,10 @@ class NUFFT(Linop):
         Desired numerical precision. The default is ``1e-6``.
     batched : bool, optional
         Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
+    normalize_coord : bool, optional
+        Normalize coordinates between -pi and pi. If ``False``,
+        assume they are correctly normalized already. The default
+        is ``True``.
 
     """
 
@@ -42,6 +46,7 @@ class NUFFT(Linop):
         eps: float = 1e-3,
         batched: bool = False,
         plan: SimpleNamespace | None = None,
+        normalize_coord: bool = True,
     ):
         self.signal_ndim = coord.shape[-1]
         self.fourier_ndim = len(coord.shape[:-1])
@@ -58,7 +63,7 @@ class NUFFT(Linop):
         if plan is not None:
             self.plan = plan
         else:
-            self.plan = __nufft_init__(coord, ishape, oversamp, eps)
+            self.plan = __nufft_init__(coord, ishape, oversamp, eps, normalize_coord)
 
         # initalize operator
         super().__init__(oshape, ishape)
@@ -105,6 +110,10 @@ class NUFFTAdjoint(Linop):
         Desired numerical precision. The default is ``1e-6``.
     batched : bool, optional
         Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
+    normalize_coord : bool, optional
+        Normalize coordinates between -pi and pi. If ``False``,
+        assume they are correctly normalized already. The default
+        is ``True``.
 
     """
 
@@ -116,6 +125,7 @@ class NUFFTAdjoint(Linop):
         eps: float = 1e-3,
         batched: bool = False,
         plan: SimpleNamespace | None = None,
+        normalize_coord: bool = True,
     ):
         self.signal_ndim = coord.shape[-1]
         self.fourier_ndim = len(coord.shape[:-1])
@@ -132,7 +142,7 @@ class NUFFTAdjoint(Linop):
         if plan is not None:
             self.plan = plan
         else:
-            self.plan = __nufft_init__(coord, oshape, oversamp, eps)
+            self.plan = __nufft_init__(coord, oshape, oversamp, eps, normalize_coord)
 
         # initalize operator
         super().__init__(oshape, ishape)

@@ -26,6 +26,7 @@ def nufft(
     coord: ArrayLike,
     oversamp: float = 1.25,
     eps: float = 1e-3,
+    normalize_coord: bool = True,
 ) -> ArrayLike:
     """
     Non-uniform Fast Fourier Transform.
@@ -47,6 +48,10 @@ def nufft(
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
+    normalize_coord : bool, optional
+        Normalize coordinates between -pi and pi. If ``False``,
+        assume they are correctly normalized already. The default
+        is ``True``.
 
     Returns
     -------
@@ -57,7 +62,7 @@ def nufft(
     """
     ndim = coord.shape[-1]
     ishape = input.shape[-ndim:]
-    plan = __nufft_init__(coord, ishape, oversamp, eps)
+    plan = __nufft_init__(coord, ishape, oversamp, eps, normalize_coord)
     return _apply(plan, input)
 
 
@@ -67,6 +72,7 @@ def nufft_adjoint(
     oshape: ArrayLike | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-3,
+    normalize_coord: bool = True,
 ) -> ArrayLike:
     """
     Adjoint non-uniform Fast Fourier Transform.
@@ -91,6 +97,10 @@ def nufft_adjoint(
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
+    normalize_coord : bool, optional
+        Normalize coordinates between -pi and pi. If ``False``,
+        assume they are correctly normalized already. The default
+        is ``True``.
 
     Returns
     -------
@@ -99,7 +109,7 @@ def nufft_adjoint(
         ``input.shape[:-ndim] + coord.shape[:-1]``.
 
     """
-    plan = __nufft_init__(coord, oshape, oversamp, eps)
+    plan = __nufft_init__(coord, oshape, oversamp, eps, normalize_coord)
     return _apply_adj(plan, input)
 
 
@@ -110,6 +120,7 @@ def __nufft_init__(
     shape: ArrayLike | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-6,
+    normalize_coord: bool = True,
 ):
     if shape is None:
         shape = estimate_shape(coord)
@@ -118,8 +129,9 @@ def __nufft_init__(
     coord = coord.astype(np.float32)
 
     # normalize
-    cmax = ((coord**2).sum(axis=-1) ** 0.5).max()
-    coord = math.pi * coord / cmax
+    if normalize_coord:
+        cmax = ((coord**2).sum(axis=-1) ** 0.5).max()
+        coord = math.pi * coord / cmax
 
     # prepare CPU nufft
     cpu_nufft = mrinufft.get_operator("finufft")(
