@@ -186,9 +186,12 @@ def _setup_cartesian(y, ndim, mask, cal_width, sobolev_width, sobolev_deg):  # n
     # Get calibration shape
     cshape = y.shape[1:]
 
+    # Scale Sobolev width
+    n = np.max(ishape)
+
     # Build Operator
     _nlinv = CartesianNlinvOp(
-        get_device(y), y.shape[0], mask, sobolev_width, sobolev_deg
+        get_device(y), y.shape[0], mask, sobolev_width / n**2, sobolev_deg
     )
 
     return False, ishape, cshape, mask, y, _nlinv
@@ -238,6 +241,9 @@ def _setup_noncartesian(
     # Get calibration shape
     cshape = len(ishape) * [cal_width]
 
+    # Scale Sobolev width
+    n = np.max(ishape)
+
     # Build Operator
     _nlinv = NonCartesianNlinvOp(
         device,
@@ -247,7 +253,7 @@ def _setup_noncartesian(
         weights,
         oversamp,
         eps,
-        sobolev_width,
+        sobolev_width / n**2,
         sobolev_deg,
     )
 
@@ -416,7 +422,7 @@ class BaseNlinvOp(NonLinop):
         xp = self.device.xp
         with self.device:
             kgrid = xp.meshgrid(
-                *[xp.arange(-n // 2, n // 2, dtype=xp.float32) / n for n in shape],
+                *[xp.arange(-n // 2, n // 2, dtype=xp.float32) for n in shape],
                 indexing="ij",
             )
         k_norm = sum(ki**2 for ki in kgrid)
@@ -570,21 +576,20 @@ class _NlinvNormal(linop.Linop):
         dx = self.W(dxhat)
 
         # Split
-        drho = dx[0]
-        dsmaps = dx[1:]
+        drho_in = dx[0]
+        dsmaps_in = dx[1:]
 
         # Pre-process Fourier Normal operator input
-        _input = dsmaps * self.rho + self.smaps * drho
+        _tmp = dsmaps_in * self.rho + self.smaps * drho_in
 
         # Apply Fourier Normal operator
-        _output = xp.stack([self.FHF.apply(_in) for _in in _input])
+        _tmp = xp.stack([self.FHF.apply(_el) for _el in _tmp])
 
         # Post-process Fourier Normal operator output
-        _output = self.smaps.conj() * _output
+        drho_out = (self.smaps.conj() * _tmp).sum(axis=0)[None, ...]
+        dsmaps_out = self.rho.conj() * _tmp
 
-        return self.Wadjoint(
-            xp.concatenate((_output.sum(axis=0)[None, ...], _output), axis=0)
-        )
+        return self.Wadjoint(xp.concatenate((drho_out, dsmaps_out), axis=0))
 
     def W(self, input):
         output = input.copy()
