@@ -70,7 +70,9 @@ def estimate_coil_subspace(
 
     """
     axis = (
-        -len(coords.shape) if coords is None else -len(data.shape) + (3 - coords.shape[-1])
+        -len(coords.shape)
+        if coords is None
+        else -len(data.shape) + (3 - coords.shape[-1])
     )
     # extract calibration region
     if coords is None:
@@ -83,9 +85,7 @@ def estimate_coil_subspace(
         training_data = training_data[..., None].swapaxes(axis - 1, -1)
     else:
         ndim = coords.shape[-1]
-        training_data, _, _ = extract_acr(
-            data, cal_width, coords=coords, shape=shape
-        )
+        training_data, _, _ = extract_acr(data, cal_width, coords=coords, shape=shape)
         training_data = training_data.T
 
     return SVDCompression(training_data, num_coils, variance_ratio)
@@ -223,7 +223,7 @@ class SVDCompression:
         return _output.contiguous()
 
     @property
-    def basis(self): # noqa
+    def basis(self):  # noqa
         return self._basis
 
     @property
@@ -231,5 +231,5 @@ class SVDCompression:
         return self._num_coeff
 
     @property
-    def explained_variance_ratio(self): # noqa
+    def explained_variance_ratio(self):  # noqa
         return self._explained_variance_ratio

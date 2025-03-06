@@ -109,7 +109,7 @@ class _ConjugateGradient(Alg):
             self.A,
             self.b.ravel(),
             self.x.ravel(),
-            atol=self.tol,
+            tol=self.tol,
             maxiter=self.max_iter,
             M=self.P,
         )  # here we let scipy/cupy handle steps.
@@ -125,8 +125,8 @@ class _ConjugateGradient(Alg):
 
 
 @with_numpy_cupy
-def _cg(A, b, x0, *, atol=0, maxiter=None, M=None):
+def _cg(A, b, x0, *, tol=0, maxiter=None, M=None):
     if get_array_module(b).__name__ == "numpy":
-        return scipy_cg(A, b, x0, atol=atol, maxiter=maxiter, M=M)[0]
+        return scipy_cg(A, b, x0, atol=tol, rtol=tol, maxiter=maxiter, M=M)[0]
     else:
-        return cupy_cg(A, b, x0, atol=atol, maxiter=maxiter, M=M)[0]
+        return cupy_cg(A, b, x0, atol=tol, rtol=tol, maxiter=maxiter, M=M)[0]

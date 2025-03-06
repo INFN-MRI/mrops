@@ -104,7 +104,7 @@ class _LSMR(Alg):
             self.A,
             self.b.ravel(),
             self.x,
-            atol=self.tol,
+            tol=self.tol,
             maxiter=self.max_iter,
         )  # here we let scipy/cupy handle steps.
 
@@ -122,13 +122,13 @@ class _LSMR(Alg):
 
 
 @with_numpy_cupy
-def _lsmr(A, b, x0=None, atol=0, maxiter=None, M=None):
+def _lsmr(A, b, x0=None, tol=0, maxiter=None, M=None):
     if x0 is not None:
         x0 = x0.ravel()
     if get_array_module(b).__name__ == "numpy":
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = scipy_lsmr(A, b, x0=x0, atol=atol, maxiter=maxiter)[0]
+            res = scipy_lsmr(A, b, x0=x0, atol=tol, btol=tol, maxiter=maxiter)[0]
         return res.astype(b.dtype)
     else:
-        return cupy_lsmr(A, b, x0=x0, atol=atol, maxiter=maxiter)[0]
+        return cupy_lsmr(A, b, x0=x0, atol=tol, btol=tol, maxiter=maxiter)[0]

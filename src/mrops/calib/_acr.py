@@ -4,20 +4,22 @@ __all__ = ["extract_acr"]
 
 import numpy as np
 
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike
 from mrinufft._array_compat import with_numpy_cupy
 
 from .. import _sigpy
 
+
 @with_numpy_cupy
 def extract_acr(
-    data: NDArray,
+    data: ArrayLike,
     cal_width: int = 24,
     ndim: int = None,
-    coords: NDArray = None,
-    weights: NDArray = None,
+    mask: ArrayLike = None,
+    coords: ArrayLike = None,
+    weights: ArrayLike = None,
     shape: int = None,
-) -> NDArray | tuple[NDArray, NDArray, NDArray | None]:
+) -> tuple[ArrayLike, ArrayLike | None] | tuple[ArrayLike, ArrayLike, ArrayLike | None]:
     """
     Extract calibration region from input dataset.
 
@@ -63,18 +65,21 @@ def extract_acr(
                 "Please provide number of spatial dimensions for Cartesian datasets"
             )
         shape = list(data.shape[-ndim:])
-        return _sigpy.resize(data, data.shape[:-ndim] + ndim * [cal_width])
-
+        _data = _sigpy.resize(data, list(data.shape[:-ndim]) + ndim * [cal_width])
+        if mask is not None:
+            _mask = _sigpy.resize(mask, ndim * [cal_width])
+            return _data, _mask
+        return _data
     else:
         if shape is None:
             raise ValueError("Please provide matrix size for Non Cartesian datasets")
 
         # get indexes for calibration samples
-        cal_width = int(
-            np.ceil(cal_width * 2**0.5)
-        )  # make sure we can extract a squared cal region later
-        cal_idx = np.amax(np.abs(coords), axis=-1) < cal_width / min(shape) / 2
+        cal_idx = (coords**2).sum(axis=-1) ** 0.5 <= (0.5 * cal_width)
+        cal_idx = cal_idx.reshape(-1, cal_idx.shape[-1])
+        cal_idx = np.prod(cal_idx, axis=0).astype(bool)
 
+        # select data
         _data = data[..., cal_idx]
         _coords = coords[..., cal_idx, :]
         if weights is not None:

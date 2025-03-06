@@ -2,28 +2,33 @@
 
 __all__ = ["nlinv_calib"]
 
+import math
 import numpy as np
 
 from numpy.typing import ArrayLike
 
-from ..base import NonLinop
 
 from mrinufft._array_compat import with_numpy_cupy
 from mrinufft._array_compat import get_array_module
 
-from .._sigpy import get_device, fft, ifft, resize
+from ..base import NonLinop
+
+from .._sigpy import get_device, resize
 from .._sigpy import linop
 from .._sigpy import estimate_shape
 
+from ..base._fftc import fft, ifft
 from ..base import FFT, IFFT, NUFFT
 from ..gadgets import MulticoilOp
 from ..solvers import IrgnmCG
+
+from ._acr import extract_acr
 
 
 @with_numpy_cupy
 def nlinv_calib(
     y: ArrayLike,
-    cal_shape: int | None = None,
+    cal_width: int | None = None,
     ndim: int | None = None,
     mask: ArrayLike | None = None,
     shape: ArrayLike | None = None,
@@ -42,7 +47,7 @@ def nlinv_calib(
     show_pbar: bool = False,
     leave_pbar: bool = True,
     record_time: bool = False,
-) -> tuple[ArrayLike, ArrayLike]:
+) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
     """
     Estimate coil sensitivity maps using NLINV.
 
@@ -50,7 +55,7 @@ def nlinv_calib(
     ----------
     y : ArrayLike
         Measured k-space data of shape ``(n_coils, ...)``
-    cal_shape : int
+    cal_width : int
         Size of k-space calibration shape, assuming isotropic matrix.
     ndim : int, optional
         Acquisition dimensionality (2D or 3D). Used for Cartesian only.
@@ -110,164 +115,36 @@ def nlinv_calib(
     device = get_device(y)
     n_coils = y.shape[0]
 
-    # Determine type of acquisition
-    if coords is None:  # Cartesian
-        NONCART = False
-
-        # Check number of dimensions
-        if ndim is None:
-            raise ValueError(
-                "ndim not provided for Cartesian acquisition (either 2 or 3)"
-            )
-        elif ndim != 2 and ndim != 3:
-            raise ValueError("ndim for Cartesian acquisition must be either 2 or 3")
-
-        # Check number of slices
-        if len(y.shape) == 3:
-            n_slices = 1
-        else:
-            n_slices = y.shape[1]
-
-        # Work in 3D kspace
-        if ndim == 2 and n_slices != 1:
-            y = fft(y, axes=(-3,), norm="ortho")
-
-        # Get shape (squeeze if n_slices = 1)
-        if n_slices != 1:
-            ishape = (n_slices,) + tuple(y.shape[-2:])
-        else:
-            ishape = tuple(y.shape[-2:])
-
-        # Select calibration region
-        if cal_shape is None:
-            cal_shape = ishape
-        else:
-            cal_shape = ndim * [cal_shape]
-
-        # Get actual matrix
-        shape = list(ishape)
-        for i in range(
-            1, len(cal_shape) + 1
-        ):  # Iterate over the last len(cal_shape) axes
-            shape[-i] = min(int(ishape[-i]), int(cal_shape[-i]))  # Take the minimum
-
-        # Handle mask
-        if mask is None:
-            if ndim == 2:
-                mask = abs(y).reshape(-1, *y.shape[1:])[
-                    0
-                ]  # assume same (kx, ky) pattern for all slices
-            else:
-                mask = abs(y[0, ..., 0])[..., None]  # assume (ky, kz) mask
-            mask = mask > 0
-        mask = mask.astype(xp.float32)
-
-        # Resize
-        y = resize(y, shape)
-        mask = resize(mask, shape[-mask.ndim :])
-
-        # Build operator
-        _nlinv = CartesianNlinvOp(device, n_coils, mask, sobolev_width, sobolev_deg)
-
-    else:  # Non Cartesian
-        NONCART = True
-        if get_device(coords).id >= 0:
-            coords = coords.get()
-
-        # Get shape (squeeze if n_slices = 1)
-        if shape is None:
-            ishape = estimate_shape(coords)
-        else:
-            ishape = shape
-
-        # Get number of dimensions
-        ndim = coords.shape[-1]
-
-        # Check number of slices
-        if ndim == 2:
-            if len(y.shape) == len(coords.shape):
-                n_slices = 1
-            else:
-                n_slices = y.shape[1]
-
-            # Work in 3D kspace
-            if n_slices != 1:
-                y = fft(y, axes=(-3,), norm="ortho")
-                coord_z = np.arange(-n_slices // 2, n_slices // 2, dtype=coords.dtype)
-                coord_z = np.broadcast_to(coord_z, coords.shape[:-1])[..., None]
-                coords = np.concatenate((coords, coord_z), axis=-1)
-
-                ishape = (n_slices,) + tuple(ishape[-2:])
-            else:
-                ishape = tuple(ishape[-2:])
-
-        # Select calibration region
-        if cal_shape is None:
-            osf = 1
-            cal_shape = ishape
-        else:
-            osf = 2**0.5
-            cal_shape = ndim * [cal_shape]
-
-        # Get actual matrix
-        shape = list(ishape)
-        for i in range(
-            1, len(cal_shape) + 1
-        ):  # Iterate over the last len(cal_shape) axes
-            shape[-i] = min(
-                int(ishape[-i]), int(np.ceil(osf * cal_shape[-i]))
-            )  # Take the minimum
-
-        # Now select data
-        idx = np.stack([abs(coords[..., n]) < (shape[n] // 2) for n in range(ndim)])
-        idx = np.prod(idx, axis=0).astype(bool)
-
-        # Actual selection
-        coords = coords[idx, :]
-        y = y[:, idx]
-
-        # Rescale trajectory
-        coords_scale = np.asarray(ishape[-ndim:]) / np.asarray(shape[-ndim:])
-        coords = 2 * np.pi * coords / np.asarray(ishape[-ndim:])
-        coords = coords_scale * coords
-
-        # If weights are provided, pre-weight k-space data
-        if weights is not None:
-            weights = weights[idx]
-            y = weights**0.5 * y
-
-        # Build operator
-        _nlinv = NonCartesianNlinvOp(
-            device,
-            n_coils,
+    # Setup problem
+    if coords is None:
+        NONCART, oshape, cshape, mask, y, _nlinv = _setup_cartesian(
+            y,
+            ndim,
+            mask,
+            cal_width,
+            sobolev_width,
+            sobolev_deg,
+        )
+    else:
+        NONCART, oshape, cshape, coords, weights, y, _nlinv = _setup_noncartesian(
+            y,
             shape,
             coords,
             weights,
+            cal_width,
             oversamp,
             eps,
             sobolev_width,
             sobolev_deg,
         )
+    cshape = list(cshape) if isinstance(cshape, (list, tuple)) else cshape.tolist()
+    xhat0 = _initialize_guess(device, n_coils, cshape, xp, y.dtype)
 
-    # Enforce shape as list
-    try:
-        shape = shape.tolist()
-    except Exception:
-        shape = list(shape)
-
-    # Initialize guess
-    if device.id >= 0:
-        with device:
-            xhat0 = xp.zeros((n_coils + 1, *shape), dtype=y.dtype)
-    else:
-        xhat0 = xp.zeros((n_coils + 1, *shape), dtype=y.dtype)
-    xhat0[0] = 1.0
-
-    # Normalize data vector
+    # Normalize input data
     yscale = 100.0 / np.linalg.norm(y)
-    y = y * yscale
+    y *= yscale
 
-    # Run algorithm
+    # Perform reconstruction
     xhat = IrgnmCG(
         _nlinv,
         y,
@@ -283,34 +160,152 @@ def nlinv_calib(
         record_time,
     ).run()
 
-    # Post-processing
+    return _postprocess_output(NONCART, _nlinv, xhat, yscale, cshape, oshape)
+
+
+def _setup_cartesian(y, ndim, mask, cal_width, sobolev_width, sobolev_deg):  # noqa
+    """Setup for Cartesian acquisition."""
+    xp = get_array_module(y)
+    if ndim is None or ndim not in {2, 3}:
+        raise ValueError("ndim must be 2 or 3 for Cartesian acquisition.")
+
+    # For multi-slice 2D acquisitions, work in 3D
+    n_slices = 1 if len(y.shape) == 3 else y.shape[1]
+    if ndim == 2 and n_slices != 1:
+        y = fft(y, axes=(-3,), norm="ortho")
+    if mask is None:
+        mask = _estimate_mask(y, ndim, xp)
+    ishape = (n_slices,) + tuple(y.shape[-2:]) if n_slices != 1 else tuple(y.shape[-2:])
+
+    # Calibraton width as minimum between matrix size and number of slices
+    cal_width = np.min([cal_width, *ishape]).item()
+
+    # Now extract ACR
+    y, mask = extract_acr(y, cal_width, ndim, mask)
+
+    # Get calibration shape
+    cshape = y.shape[1:]
+
+    # Build Operator
+    _nlinv = CartesianNlinvOp(
+        get_device(y), y.shape[0], mask, sobolev_width, sobolev_deg
+    )
+
+    return False, ishape, cshape, mask, y, _nlinv
+
+
+def _setup_noncartesian(
+    y, shape, coords, weights, cal_width, oversamp, eps, sobolev_width, sobolev_deg
+):  # noqa
+    """Setup for Non-Cartesian acquisition."""
+    device = get_device(y)
+    if device.id >= 0:
+        coords = coords.get()
+    ndim = coords.shape[-1]
+    ishape = estimate_shape(coords) if shape is None else shape
+
+    # For multi-slice 2D acquisitions, work in 3D
+    if ndim == 2 and len(y.shape) != len(coords.shape):
+        n_slices = y.shape[1]
+        y = fft(y, axes=(-3,), norm="ortho")
+        coord_z = np.broadcast_to(
+            np.arange(-n_slices // 2, n_slices // 2, dtype=coords.dtype),
+            coords.shape[:-1],
+        )[..., None]
+        coords = np.concatenate((coords, coord_z), axis=-1)
+        ishape = (n_slices,) + tuple(ishape[-2:])
+    else:
+        n_slices = 1
+        ishape = tuple(ishape[-2:])
+
+    # Calibraton width as minimum between matrix size and number of slices
+    cal_width = np.min([cal_width, *ishape]).item()
+
+    # If we are reconstructing a low res image, extend ACR
+    # to make sure corners are properly reconstructed in the target ACR
+    osf = 1 if cal_width == min(ishape) else 2**0.5
+    cal_width = int(np.ceil(osf * cal_width).item())
+
+    # Now extract ACR
+    y, coords, weights = extract_acr(
+        y, cal_width=cal_width, coords=coords, weights=weights, shape=ishape
+    )
+
+    # Apply DCF
+    if weights is not None:
+        y *= weights**0.5
+
+    # Get calibration shape
+    cshape = len(ishape) * [cal_width]
+
+    # Build Operator
+    _nlinv = NonCartesianNlinvOp(
+        device,
+        y.shape[0],
+        cshape,
+        coords,
+        weights,
+        oversamp,
+        eps,
+        sobolev_width,
+        sobolev_deg,
+    )
+
+    return True, ishape, cshape, coords, weights, y, _nlinv
+
+
+def _estimate_mask(y, ndim, xp):  # noqa
+    """Estimate sampling mask for Cartesian acquisition."""
+    if ndim == 2:
+        mask = abs(y).reshape(-1, *y.shape[1:])[0]
+    else:
+        mask = abs(y[0, ..., 0])[..., None]
+    return (mask > 0).astype(xp.float32)
+
+
+def _rescale_coordinates(coords, ishape, shape):  # noqa
+    """Rescale k-space trajectory for NUFFT."""
+    ndim = coords.shape[-1]
+    coords_scale = np.asarray(ishape[-ndim:]) / np.asarray(shape[-ndim:])
+    return coords_scale * (2 * math.pi * coords / np.asarray(ishape[-ndim:]))
+
+
+def _initialize_guess(device, n_coils, shape, xp, dtype):  # noqa
+    """Initialize solution guess."""
+    xhat0 = xp.zeros((n_coils + 1, *shape), dtype=dtype)
+    xhat0[0] = 1.0
+    return xhat0
+
+
+def _postprocess_output(NONCART, _nlinv, xhat, yscale, cal_width, oshape):  # noqa
+    """Post-process results and return sensitivity maps and calibration region."""
     x = _nlinv.W(xhat) / yscale
 
-    # Split output
-    rho = x[0]
-    smaps = x[1:]
+    # Split image and sensitivities
+    rho, smaps = x[0], x[1:]
 
-    # Normalize
+    # Normalize magnitude
     rss = (smaps.conj() * smaps).sum(axis=0) ** 0.5
     rho = rho * rss
-    # smaps = smaps / rss
+    smaps = smaps / rss
 
-    # Get reference phase
+    # Normalize phase
     phref = smaps[0] / abs(smaps[0])
     smaps = phref.conj() * smaps
 
     # Get GRAPPA training data
-    ft_axes = tuple(range(-rho.ndim, 0))
-    grappa_train = fft(smaps * rho, axes=ft_axes, norm="ortho")
-    if NONCART:  # Cut corners
-        grappa_shape = list(grappa_train.shape[: -len(cal_shape)]) + list(cal_shape)
+    grappa_train = fft(smaps * rho, axes=tuple(range(-rho.ndim, 0)), norm="ortho")
+    if NONCART:
+        grappa_shape = list(grappa_train.shape[: -len(cal_width)]) + list(cal_width)
         grappa_train = resize(grappa_train, grappa_shape)
 
-    # Resize to correct shape
-    smaps_shape = [smaps.shape[0]] + list(ishape[-smaps.ndim - 1 :])
-    smaps = fft(smaps, axes=ft_axes, norm="ortho")
-    smaps = resize(smaps, smaps_shape)
-    smaps = ifft(smaps, axes=ft_axes, norm="ortho")
+    # Interpolate Coil sensitivities to original matrix size
+    smaps_shape = [smaps.shape[0]] + list(oshape[-rho.ndim :])
+    smaps = ifft(
+        resize(fft(smaps, axes=tuple(range(-rho.ndim, 0)), norm="ortho"), smaps_shape),
+        axes=tuple(range(-rho.ndim, 0)),
+        norm="ortho",
+    )
 
     return smaps, grappa_train, rho
 
@@ -440,34 +435,7 @@ class BaseNlinvOp(NonLinop):
 
     def _compute_jacobian(self, xhat):
         """Compute derivative of forward operator."""
-        try:
-            shape = tuple(self.matrix_size.tolist())
-        except Exception:
-            shape = tuple(self.matrix_size)
-
-        # Split input
-        x = self.W(xhat)
-        rho = x[0]
-        smaps = x[1:]
-        n_coils = smaps.shape[0]
-
-        # Compute current derivative operator
-        # PF * (M * dC_n + dM * C_n for n in range(self.n_coils+1))
-        unsqueeze = linop.Reshape([1] + self._PF.oshape, self._PF.oshape)
-        DF_n = []
-        for n in range(n_coils):
-            DF_n.append(
-                unsqueeze
-                * self._PF
-                * (
-                    linop.Multiply(shape, rho)
-                    * self._W
-                    * linop.Slice((n_coils + 1,) + tuple(shape), n + 1)
-                    + linop.Multiply(shape, smaps[n])
-                    * linop.Slice((n_coils + 1,) + tuple(shape), 0)
-                )
-            )
-        return linop.Vstack(DF_n, axis=0)
+        return _NlinvJacobian(self.matrix_size, self._W, self._PF, self.W(xhat))
 
 
 class CartesianNlinvOp(BaseNlinvOp):
@@ -527,7 +495,6 @@ class NonCartesianNlinvOp(BaseNlinvOp):
             coords,
             oversamp,
             eps,
-            normalize_coord=False,
         )
 
         # Preconditioning
@@ -537,3 +504,98 @@ class NonCartesianNlinvOp(BaseNlinvOp):
             DCF = linop.Identity(F.oshape)
 
         return DCF * F  # so that Fadj(input) = NUFFT(DCF(input))
+
+
+# %% Utility class to enable Toeplitz in NLINV
+class _NlinvJacobian(linop.Linop):
+    def __init__(self, matrix_size, W, PF, x):
+        """Compute derivative of forward operator."""
+        try:
+            shape = tuple(matrix_size.tolist())
+        except Exception:
+            shape = tuple(matrix_size)
+
+        # Split input
+        rho = x[0]
+        smaps = x[1:]
+        n_coils = smaps.shape[0]
+
+        # Compute current derivative operator
+        # PF * (M * dC_n + dM * C_n for n in range(self.n_coils+1))
+        unsqueeze = linop.Reshape([1] + PF.oshape, PF.oshape)
+        DF_n = []
+        for n in range(n_coils):
+            DF_n.append(
+                unsqueeze
+                * PF
+                * (
+                    linop.Multiply(shape, rho)
+                    * W
+                    * linop.Slice((n_coils + 1,) + tuple(shape), n + 1)
+                    + linop.Multiply(shape, smaps[n])
+                    * linop.Slice((n_coils + 1,) + tuple(shape), 0)
+                )
+            )
+
+        _linop = linop.Vstack(DF_n, axis=0)
+
+        super().__init__(_linop.oshape, _linop.ishape)
+        self._linop = _linop
+        self._normal = _NlinvNormal(_linop.ishape, W, PF, x)
+
+    def _apply(self, input):
+        return self._linop._apply(input)
+
+    def _normal_linop(self):
+        return self._normal
+
+    def _adjoint_linop(self):
+        return self._linop.H
+
+
+class _NlinvNormal(linop.Linop):
+    def __init__(self, shape, W, PF, x):
+        rho = x[0]
+        smaps = x[1:]
+
+        # build
+        self._W = W
+        self.FHF = PF.N
+        self.rho = rho
+        self.smaps = smaps
+        super().__init__(shape, shape)
+
+    def _apply(self, dxhat):
+        xp = get_array_module(dxhat)
+        dx = self.W(dxhat)
+
+        # Split
+        drho = dx[0]
+        dsmaps = dx[1:]
+
+        # Pre-process Fourier Normal operator input
+        _input = dsmaps * self.rho + self.smaps * drho
+
+        # Apply Fourier Normal operator
+        _output = xp.stack([self.FHF.apply(_in) for _in in _input])
+
+        # Post-process Fourier Normal operator output
+        _output = self.smaps.conj() * _output
+
+        return self.Wadjoint(
+            xp.concatenate((_output.sum(axis=0)[None, ...], _output), axis=0)
+        )
+
+    def W(self, input):
+        output = input.copy()
+        for s in range(1, input.shape[0]):
+            output[s] = self._W.apply(input[s])
+
+        return output
+
+    def Wadjoint(self, input):
+        output = input.copy()
+        for s in range(1, input.shape[0]):
+            output[s] = self._W.H.apply(input[s])
+
+        return output
