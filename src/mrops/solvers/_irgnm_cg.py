@@ -14,8 +14,8 @@ if CUPY_AVAILABLE:
 from .._sigpy import get_device
 from .._sigpy.app import App
 from .._sigpy.linop import Identity
-from ..base import NonLinop
 
+from ..base import NonLinop
 from ._cg import ConjugateGradient
 from ._irgnm import IrgnmBase
 
@@ -115,7 +115,7 @@ class _IrgnmCG(IrgnmBase):
         )
 
         # Setup Operator
-        A = DGn.H * DGn + self.alpha_n * Identity(DGn.H.oshape)
+        A = DGn.N + self.alpha_n * Identity(DGn.H.oshape)
 
         # Initialize CG variables
         device = get_device(self.x)

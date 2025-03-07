@@ -2,12 +2,14 @@
 
 __all__ = ["MulticoilOp"]
 
+import numpy as np
+
 from numpy.typing import ArrayLike
 
 from .._sigpy import linop
 
 
-def MulticoilOp(encoding: linop.Linop, smaps: ArrayLike, batched: bool = False):
+def MulticoilOp(encoding: linop.Linop, smaps: ArrayLike):
     """
     Transform single Coil encoding to Multicoil.
 

@@ -47,7 +47,11 @@ class FFT(Linop):
             self.oshape = [-1] + self.oshape
 
     def _apply(self, input):
-        return fft(input, axes=self.axes, center=self.center)
+        if self.axes is None and self.batched:
+            axes = list(range(-len(self.ishape, 0)))
+        else:
+            axes = self.axes
+        return fft(input, axes=axes, center=self.center)
 
     def _adjoint_linop(self):
         if self.batched:
@@ -98,7 +102,11 @@ class IFFT(Linop):
             self.oshape = [-1] + self.oshape
 
     def _apply(self, input):
-        return ifft(input, axes=self.axes, center=self.center)
+        if self.axes is None and self.batched:
+            axes = list(range(-len(self.ishape, 0)))
+        else:
+            axes = self.axes
+        return ifft(input, axes=axes, center=self.center)
 
     def _adjoint_linop(self):
         if self.batched:

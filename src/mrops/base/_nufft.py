@@ -63,7 +63,8 @@ def nufft(
     ndim = coord.shape[-1]
     ishape = input.shape[-ndim:]
     plan = __nufft_init__(coord, ishape, oversamp, eps, normalize_coord)
-    return _apply(plan, input)
+    output = _apply(plan, input)
+    return output.reshape(*output.shape[:-1], *coord.shape[:-1])
 
 
 def nufft_adjoint(
@@ -91,7 +92,7 @@ def nufft_adjoint(
         ``coord[..., i]`` should be scaled to have its range between
         ``-n_i // 2``, and ``n_i // 2``.
     oshape : ArrayLike[int] | None, optional
-        output shape of the form ``(..., n_{ndim - 1}, ..., n_1, n_0)``.
+        Output shape of the form ``(..., n_{ndim - 1}, ..., n_1, n_0)``.
         The default is ``None`` (estimated from ``coord``).
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
@@ -109,6 +110,8 @@ def nufft_adjoint(
         ``input.shape[:-ndim] + coord.shape[:-1]``.
 
     """
+    fourier_ndim = len(coord) - 1
+    input = input.reshape(*input.shape[:-fourier_ndim], -1)
     plan = __nufft_init__(coord, oshape, oversamp, eps, normalize_coord)
     return _apply_adj(plan, input)
 
@@ -132,6 +135,12 @@ def __nufft_init__(
     if normalize_coord:
         cmax = ((coord**2).sum(axis=-1) ** 0.5).max()
         coord = math.pi * coord / cmax
+
+    # enforce numpy array for coords
+    try:
+        coord = coord.get()
+    except Exception:
+        pass
 
     # prepare CPU nufft
     cpu_nufft = mrinufft.get_operator("finufft")(

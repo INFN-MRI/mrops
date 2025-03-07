@@ -25,7 +25,7 @@ def extract_acr(
 
     Parameters
     ----------
-    data : NDArray
+    data : ArrayLike
         Input k-space dataset of shape ``(..., *shape)`` (Cartesian) or
         ``(..., npts)`` (Non Cartesian).
     cal_width : int, optional
@@ -33,10 +33,12 @@ def extract_acr(
     ndim : int, optional
         Number of spatial dimensions. The default is ``None``.
         Required for Cartesian datasets.
-    coords : NDArray, optional
+    mask : ArrayLike, optional
+        Sampling mask for Cartesian datasets of shape ``(..., *shape)``.
+    coords : ArrayLike, optional
         K-space trajectory of shape ``(..., npts, ndim)``, normalized between ``(-0.5, 0.5)``.
         Required for Non Cartesian datasets. The default is ``None``.
-    weights : NDArray, optional
+    weights : ArrayLike, optional
         K-space density compensation of shape ``(..., npts)``. The default is ``None``.
     shape : int, optional
         Matrix size of shape ``(ndim,)``.
@@ -50,13 +52,15 @@ def extract_acr(
 
     Returns
     -------
-    cal_data : NDArray
+    cal_data : ArrayLike
         Calibration dataset of shape ``(..., *[cal_width]*ndim)`` (Cartesian) or
         ``(..., cal_width)`` (Non Cartesian).
-    cal_coords : NDArray, optional
-        Trajectory for calibration dataset of shape ``(..., cal_width, ndim)``.
-    cal_weights : NDArray, optional
-        Density compensation for calibration dataset of shape ``(..., cal_width)``.
+    cal_mask : ArrayLike, optional
+        Sampling mask for calibration dataset of shape ``(..., cal_width, ndim)`` (Cartesian).
+    cal_coords : ArrayLike, optional
+        Trajectory for calibration dataset of shape ``(..., cal_width, ndim)`` (Non Cartesian).
+    cal_weights : ArrayLike, optional
+        Density compensation for calibration dataset of shape ``(..., cal_width)`` (Non Cartesian).
 
     """
     if coords is None:

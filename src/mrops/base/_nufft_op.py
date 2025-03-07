@@ -56,14 +56,20 @@ class NUFFT(Linop):
         self.batched = batched
 
         # get input and output shape
-        ishape = ishape[-self.signal_ndim :]
-        oshape = coord.shape[: self.fourier_ndim]
+        if batched:
+            ishape = ishape[-self.signal_ndim :]
+            oshape = coord.shape[: self.fourier_ndim]
+        else:
+            ishape = ishape
+            oshape = list(ishape[: -self.signal_ndim]) + list(coord.shape[:-1])
 
         # build plan
         if plan is not None:
             self.plan = plan
         else:
-            self.plan = __nufft_init__(coord, ishape, oversamp, eps, normalize_coord)
+            self.plan = __nufft_init__(
+                coord, ishape[-self.signal_ndim :], oversamp, eps, normalize_coord
+            )
 
         # initalize operator
         super().__init__(oshape, ishape)
@@ -135,14 +141,20 @@ class NUFFTAdjoint(Linop):
         self.batched = batched
 
         # get input and output shape
-        ishape = coord.shape[: self.fourier_ndim]
-        oshape = oshape[-self.signal_ndim :]
+        if batched:
+            ishape = coord.shape[: self.fourier_ndim]
+            oshape = oshape[-self.signal_ndim :]
+        else:
+            ishape = list(oshape[: -self.signal_ndim]) + list(coord.shape[:-1])
+            oshape = oshape
 
         # build plan
         if plan is not None:
             self.plan = plan
         else:
-            self.plan = __nufft_init__(coord, oshape, oversamp, eps, normalize_coord)
+            self.plan = __nufft_init__(
+                coord, oshape[-self.signal_ndim :], oversamp, eps, normalize_coord
+            )
 
         # initalize operator
         super().__init__(oshape, ishape)

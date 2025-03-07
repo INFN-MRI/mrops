@@ -6,23 +6,24 @@ __all__ = ["SVDCompression", "compress_coil"]
 
 import torch
 
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike
+
 from mrinufft._array_compat import with_torch
 
 from ._acr import extract_acr
 
 
 def estimate_bloch_subspace(
-    training_data: NDArray,
+    training_data: ArrayLike,
     num_coeff: int = None,
     variance_ratio: float = None,
-) -> NDArray:
+) -> ArrayLike:
     """
     Estimate Bloch subspace basis.
 
     Parameters
     ----------
-    training_data : NDArray
+    training_data : ArrayLike
         Training dataset of shape ``(num_atoms, num_contrasts)``.
     num_coeff : int, optional
         Size of subspace basis (i.g., subspace size). User can either specify this
@@ -33,7 +34,7 @@ def estimate_bloch_subspace(
 
     Returns
     -------
-    basis : NDArray
+    basis : ArrayLike
         Subspace basis of shape ``(num_contrasts, num_coeff)``.
 
     """
@@ -41,12 +42,12 @@ def estimate_bloch_subspace(
 
 
 def estimate_coil_subspace(
-    data: NDArray,
+    data: ArrayLike,
     num_coils: int = None,
     variance_ratio: float = None,
     cal_width: int = 24,
     ndim: int = None,
-    coords: NDArray = None,
+    coords: ArrayLike = None,
     shape: int = None,
 ) -> SVDCompression:
     """
@@ -54,7 +55,7 @@ def estimate_coil_subspace(
 
     Parameters
     ----------
-    training_data : NDArray
+    training_data : ArrayLike
         Training dataset of shape ``(num_atoms, num_contrasts)``.
     num_coeff : int, optional
         Size of subspace basis (i.g., subspace size).
@@ -65,7 +66,7 @@ def estimate_coil_subspace(
 
     Returns
     -------
-    basis : NDArray
+    basis : ArrayLike
         Subspace basis of shape ``(num_contrasts, num_coeff)``.
 
     """
@@ -86,27 +87,27 @@ def estimate_coil_subspace(
     else:
         ndim = coords.shape[-1]
         training_data, _, _ = extract_acr(data, cal_width, coords=coords, shape=shape)
-        training_data = training_data.T
+        training_data = training_data.reshape(training_data.shape[0], -1).T
 
     return SVDCompression(training_data, num_coils, variance_ratio)
 
 
 @with_torch
 def compress_coil(
-    data: NDArray,
+    data: ArrayLike,
     num_coils: int = None,
     variance_ratio: float = None,
     cal_width: int = 24,
     ndim: int = None,
-    coords: NDArray = None,
+    coords: ArrayLike = None,
     shape: int = None,
-) -> NDArray:
+) -> ArrayLike:
     """
     Compress data along ``coil`` axis.
 
     Parameters
     ----------
-    data : NDArray
+    data : ArrayLike
         Input k-space dataset of shape ``(B, C, ...)`` (2D Cartesian),
         ``(C, ...)`` (3D Cartesian), ``(B, C, *trajectory.shape[:-1])`` (2D Non Cartesian)
         or ``(C, *trajectory.shape[:-1])`` (3D Non Cartesian).
@@ -121,7 +122,7 @@ def compress_coil(
     ndim : int, optional
         Number of spatial dimensions. The default is ``None``.
         Required for Cartesian datasets.
-    coords : NDArray, optional
+    coords : ArrayLike, optional
         K-space trajectory of shape ``(num_shots, num_pts, ndim)``, normalized between ``(-0.5, 0.5)``.
         Required for Non Cartesian datasets. The default is ``None``.
     shape : int, optional
@@ -130,8 +131,8 @@ def compress_coil(
 
     Returns
     -------
-    NDArray
-        DESCRIPTION.
+    ArrayLike
+        Compressed k-space.
 
     """
     axis = -len(coords.shape) if coords is None else 3 - coords.shape[-1]
@@ -148,7 +149,7 @@ class SVDCompression:
 
     Parameters
     ----------
-    training_data : NDArray
+    training_data : ArrayLike
         Training data for subspace estimation of shape ``(num_samples, space_size)``.
     num_coeff : int, optional
         Size of subspace basis (i.g., subspace size). User can either specify this
@@ -159,7 +160,7 @@ class SVDCompression:
 
     Attributes
     ----------
-    basis : NDArray
+    basis : ArrayLike
         Subspace basis of shape ``(space_size, subspace_size)``
     explained_variance_ratio : float
         Explained variance ratio for the given basis size.
@@ -169,7 +170,7 @@ class SVDCompression:
     @with_torch
     def __init__(
         self,
-        training_data: NDArray,
+        training_data: ArrayLike,
         num_coeff: int = None,
         variance_ratio: float = None,
     ):

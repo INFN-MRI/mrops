@@ -5,6 +5,7 @@ __all__ = ["IrgnmBase"]
 from numpy.typing import ArrayLike
 
 from .._sigpy.alg import Alg
+
 from ..base import NonLinop
 
 
@@ -83,6 +84,7 @@ class IrgnmBase(Alg):
             Final estimate after (optional) postprocessing.
 
         """
+        # print(f"IRGN Iter: {self.iter}")
         self.alpha_n = max(self.alpha0 * (self.q**self.iter), self.alpha_min)
         self.A.update(self.x)
         self.setup_solver()

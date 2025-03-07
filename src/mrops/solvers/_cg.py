@@ -126,7 +126,9 @@ class _ConjugateGradient(Alg):
 
 @with_numpy_cupy
 def _cg(A, b, x0, *, tol=0, maxiter=None, M=None):
-    if get_array_module(b).__name__ == "numpy":
-        return scipy_cg(A, b, x0, atol=tol, rtol=tol, maxiter=maxiter, M=M)[0]
-    else:
-        return cupy_cg(A, b, x0, atol=tol, rtol=tol, maxiter=maxiter, M=M)[0]
+    if maxiter is not None and maxiter > 0:
+        if get_array_module(b).__name__ == "numpy":
+            return scipy_cg(A, b, x0, atol=tol, rtol=tol, maxiter=maxiter, M=M)[0]
+        else:
+            return cupy_cg(A, b, x0, atol=tol, maxiter=maxiter, M=M)[0]
+    return x0

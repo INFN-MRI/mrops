@@ -7,7 +7,6 @@ import numpy as np
 
 from numpy.typing import ArrayLike
 
-
 from mrinufft._array_compat import with_numpy_cupy
 from mrinufft._array_compat import get_array_module
 
@@ -16,9 +15,10 @@ from ..base import NonLinop
 from .._sigpy import get_device, resize
 from .._sigpy import linop
 from .._sigpy import estimate_shape
+from .._linop import CartesianMR, NonCartesianMR
 
 from ..base._fftc import fft, ifft
-from ..base import FFT, IFFT, NUFFT
+from ..base import IFFT
 from ..gadgets import MulticoilOp
 from ..solvers import IrgnmCG
 
@@ -38,7 +38,7 @@ def nlinv_calib(
     eps: float = 1e-3,
     sobolev_width: int = 200,
     sobolev_deg: int = 32,
-    max_iter: int = 20,
+    max_iter: int = 10,
     cg_iter: int = 10,
     cg_tol: float = 1e-2,
     alpha0: float = 1.0,
@@ -201,9 +201,6 @@ def _setup_noncartesian(
     y, shape, coords, weights, cal_width, oversamp, eps, sobolev_width, sobolev_deg
 ):  # noqa
     """Setup for Non-Cartesian acquisition."""
-    device = get_device(y)
-    if device.id >= 0:
-        coords = coords.get()
     ndim = coords.shape[-1]
     ishape = estimate_shape(coords) if shape is None else shape
 
@@ -217,7 +214,7 @@ def _setup_noncartesian(
         )[..., None]
         coords = np.concatenate((coords, coord_z), axis=-1)
         ishape = (n_slices,) + tuple(ishape[-2:])
-    else:
+    elif ndim == 2:
         n_slices = 1
         ishape = tuple(ishape[-2:])
 
@@ -246,7 +243,7 @@ def _setup_noncartesian(
 
     # Build Operator
     _nlinv = NonCartesianNlinvOp(
-        device,
+        get_device(y),
         y.shape[0],
         cshape,
         coords,
@@ -463,14 +460,9 @@ class CartesianNlinvOp(BaseNlinvOp):
         except Exception:
             shape = tuple(self.matrix_size)
         n_dims = len(shape)
+        ft_axes = tuple(range(-n_dims, 0))
 
-        # Generate Sampling operator
-        P = linop.Multiply(tuple(mask.shape), mask)
-
-        # Generate multicoil FFT
-        F = FFT(tuple(mask.shape), axes=tuple(range(-n_dims, 0)))
-
-        return P * F
+        return CartesianMR(shape, mask, ft_axes)
 
 
 class NonCartesianNlinvOp(BaseNlinvOp):
@@ -495,21 +487,7 @@ class NonCartesianNlinvOp(BaseNlinvOp):
         except Exception:
             shape = tuple(self.matrix_size)
 
-        # NUFFT
-        F = NUFFT(
-            (self.n_coils,) + shape,
-            coords,
-            oversamp,
-            eps,
-        )
-
-        # Preconditioning
-        if weights is not None:
-            DCF = linop.Multiply(F.oshape, weights**0.5)
-        else:
-            DCF = linop.Identity(F.oshape)
-
-        return DCF * F  # so that Fadj(input) = NUFFT(DCF(input))
+        return NonCartesianMR(shape, coords, weights, oversamp, eps, toeplitz=True)
 
 
 # %% Utility class to enable Toeplitz in NLINV
