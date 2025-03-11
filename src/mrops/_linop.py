@@ -7,8 +7,9 @@ from types import SimpleNamespace
 from numpy.typing import ArrayLike
 
 from ._sigpy import linop
+from ._sigpy.linop import Multiply
 
-from .base import FFT, NUFFT, Multiply
+from .base import FFT, NUFFT
 
 from .toep import ToeplitzOp
 
@@ -29,8 +30,6 @@ class CartesianMR(linop.Linop):
         The default is ``None`` (all axes).
     center : bool, optional
         Toggle center iFFT. The default is ``True``.
-    batched : bool, optional
-        Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
 
     """
 
@@ -40,14 +39,13 @@ class CartesianMR(linop.Linop):
         mask: ArrayLike | None = None,
         axes: ArrayLike | None = None,
         center: bool = True,
-        batched: bool = False,
     ):
         # Generate FFT operator
-        F = FFT(shape, axes, center, batched)
+        F = FFT(shape, axes, center)
 
         # Undersampled FFT
         if mask is not None:
-            PF = Multiply(shape, mask, batched=batched) * F
+            PF = Multiply(shape, mask) * F
         else:
             PF = F
 
@@ -85,8 +83,6 @@ class NonCartesianMR(linop.Linop):
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    batched : bool, optional
-        Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
     normalize_coord : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
@@ -104,7 +100,6 @@ class NonCartesianMR(linop.Linop):
         weights: ArrayLike | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
-        batched: bool = False,
         plan: SimpleNamespace | None = None,
         normalize_coord: bool = True,
         toeplitz: bool | None = None,
@@ -112,15 +107,11 @@ class NonCartesianMR(linop.Linop):
         ndim = coord.shape[-1]
 
         # Generate NUFFT operator
-        F = NUFFT(ishape, coord, oversamp, eps, batched, plan, normalize_coord)
+        F = NUFFT(ishape, coord, oversamp, eps, plan, normalize_coord)
 
         # Density compensation
         if weights is not None:
-            if batched:
-                oshape = F.oshape[1:]
-            else:
-                oshape = F.oshape
-            PF = Multiply(oshape, weights**0.5, batched=batched) * F
+            PF = Multiply(F.oshape, weights**0.5) * F
         else:
             PF = F
 
@@ -131,7 +122,6 @@ class NonCartesianMR(linop.Linop):
         self._weights = weights
         self._oversamp = oversamp
         self._eps = eps
-        self._batched = batched
         self._normalize_coord = normalize_coord
 
         if toeplitz is None:
@@ -157,6 +147,5 @@ class NonCartesianMR(linop.Linop):
             self._weights,
             self._oversamp,
             self._eps,
-            self._batched,
             self._normalize_coord,
         )

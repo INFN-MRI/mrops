@@ -5,8 +5,9 @@ import warnings
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     import sigpy.linop as original_linop
+    from sigpy import get_device
 
-from mrinufft._array_compat import get_array_module
+
 import numpy as np
 
 
@@ -20,7 +21,7 @@ original_linop._check_shape_positive = _patched_check_shape_positive
 
 
 # Patch the Embed class
-class PatchedEmbed(original_linop.Linop):
+class PatchedEmbed(original_linop.Linop):  # noqa
     """Embed input into a zero array with the given shape and index.
 
     Given input `input` and index `idx`,
@@ -37,9 +38,10 @@ class PatchedEmbed(original_linop.Linop):
         super().__init__(oshape, ishape)
 
     def _apply(self, input):
-        xp = get_array_module(input)
-        output = xp.zeros(self.oshape, dtype=input.dtype)
-        output[self.idx] = input
+        device = get_device(input)
+        with device:
+            output = device.xp.zeros(self.oshape, dtype=input.dtype)
+            output[self.idx] = input
         return output
 
     def _adjoint_linop(self):

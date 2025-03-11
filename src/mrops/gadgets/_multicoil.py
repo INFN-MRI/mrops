@@ -2,8 +2,6 @@
 
 __all__ = ["MulticoilOp"]
 
-import numpy as np
-
 from numpy.typing import ArrayLike
 
 from .._sigpy import linop

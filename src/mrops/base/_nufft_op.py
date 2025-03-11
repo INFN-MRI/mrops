@@ -29,8 +29,6 @@ class NUFFT(Linop):
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    batched : bool, optional
-        Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
     normalize_coord : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
@@ -44,7 +42,6 @@ class NUFFT(Linop):
         coord: ArrayLike,
         oversamp: float = 1.25,
         eps: float = 1e-3,
-        batched: bool = False,
         plan: SimpleNamespace | None = None,
         normalize_coord: bool = True,
     ):
@@ -53,15 +50,10 @@ class NUFFT(Linop):
         self.coord = coord
         self.oversamp = oversamp
         self.eps = eps
-        self.batched = batched
 
         # get input and output shape
-        if batched:
-            ishape = ishape[-self.signal_ndim :]
-            oshape = coord.shape[: self.fourier_ndim]
-        else:
-            ishape = ishape
-            oshape = list(ishape[: -self.signal_ndim]) + list(coord.shape[:-1])
+        ishape = ishape
+        oshape = list(ishape[: -self.signal_ndim]) + list(coord.shape[:-1])
 
         # build plan
         if plan is not None:
@@ -74,23 +66,12 @@ class NUFFT(Linop):
         # initalize operator
         super().__init__(oshape, ishape)
 
-        # enable broadcasting
-        if self.batched:
-            self.ishape = [-1] + self.ishape
-            self.oshape = [-1] + self.oshape
-
     def _apply(self, input):
         output = _apply(self.plan, input)
         return output.reshape(*output.shape[:-1], *self.coord.shape[:-1])
 
     def _adjoint_linop(self):
-        if self.batched:
-            ishape = self.ishape[-self.signal_ndim :]
-        else:
-            ishape = self.ishape
-        return NUFFTAdjoint(
-            ishape, self.coord, self.oversamp, self.eps, self.batched, self.plan
-        )
+        return NUFFTAdjoint(self.ishape, self.coord, self.oversamp, self.eps, self.plan)
 
     def _normal_linop(self):
         return self.H * self
@@ -114,8 +95,6 @@ class NUFFTAdjoint(Linop):
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    batched : bool, optional
-        Toggle leading axis ``(-1)`` for broadcasting. The default is ``False``.
     normalize_coord : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
@@ -129,7 +108,6 @@ class NUFFTAdjoint(Linop):
         coord: ArrayLike,
         oversamp: float = 1.25,
         eps: float = 1e-3,
-        batched: bool = False,
         plan: SimpleNamespace | None = None,
         normalize_coord: bool = True,
     ):
@@ -138,15 +116,10 @@ class NUFFTAdjoint(Linop):
         self.coord = coord
         self.oversamp = oversamp
         self.eps = eps
-        self.batched = batched
 
         # get input and output shape
-        if batched:
-            ishape = coord.shape[: self.fourier_ndim]
-            oshape = oshape[-self.signal_ndim :]
-        else:
-            ishape = list(oshape[: -self.signal_ndim]) + list(coord.shape[:-1])
-            oshape = oshape
+        ishape = list(oshape[: -self.signal_ndim]) + list(coord.shape[:-1])
+        oshape = oshape
 
         # build plan
         if plan is not None:
@@ -159,20 +132,9 @@ class NUFFTAdjoint(Linop):
         # initalize operator
         super().__init__(oshape, ishape)
 
-        # enable broadcasting
-        if self.batched:
-            self.ishape = [-1] + self.ishape
-            self.oshape = [-1] + self.oshape
-
     def _apply(self, input):
         input = input.reshape(*input.shape[: -self.fourier_ndim], -1)
         return _apply_adj(self.plan, input)
 
     def _adjoint_linop(self):
-        if self.batched:
-            oshape = self.oshape[-self.signal_ndim :]
-        else:
-            oshape = self.oshape
-        return NUFFT(
-            oshape, self.coord, self.oversamp, self.eps, self.batched, self.plan
-        )
+        return NUFFT(self.oshape, self.coord, self.oversamp, self.eps, self.plan)
