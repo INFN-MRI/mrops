@@ -31,7 +31,7 @@ class CartesianMR(linop.Linop):
     mask : ArrayLike[int] | None, optional
         Sampling mask for undersampled imaging.
         Must be shaped ``(ny, nx | 1)`` (2D)
-        or ``(nz, ny, nx | 1)`` (2D)
+        or ``(nz, ny, nx | 1)`` (2D).
     axes : ArrayLike[int] | None, optional
         Axes over which to compute the FFT.
         The default is ``None`` (all spatial axes).
@@ -47,7 +47,7 @@ class CartesianMR(linop.Linop):
         axes: ArrayLike | None = None,
         center: bool = True,
     ):
-        if len(shape) != 2 or len(shape) != 3:
+        if len(shape) != 2 and len(shape) != 3:
             raise ValueError("shape must be either (ny, nx) or (nz, ny, nx)")
         if mask is not None and np.allclose(mask.shape[:-1], shape[:-1]) is False:
             raise ValueError(
@@ -92,7 +92,9 @@ class StackedCartesianMR(linop.Linop):
     mask : ArrayLike[int] | None, optional
         Sampling mask for undersampled imaging.
         Must be shaped ``(nstacks, ny, nx | 1)`` (2D)
-        or ``(nstacks, nz, ny, nx | 1)`` (2D)
+        or ``(nstacks, nz, ny, nx | 1)`` (2D).
+    n_stack_axes : int, optional
+        Number of axis (starting from left) representing stack dimensions.
     axes : ArrayLike[int] | None, optional
         Axes over which to compute the FFT.
         The default is ``None`` (all spatial axes).
@@ -105,26 +107,44 @@ class StackedCartesianMR(linop.Linop):
         self,
         shape: ArrayLike,
         mask: ArrayLike | None = None,
+        n_stack_axes: int = 0,
         axes: ArrayLike | None = None,
         center: bool = True,
     ):
-        if len(shape) != 3 or len(shape) != 4:
+        if len(shape) != 2 + n_stack_axes and len(shape) != 3 + n_stack_axes:
             raise ValueError(
-                "shape must be either (nstacks, ny, nx) or (nstacks, nz, ny, nx)"
+                "shape must be either (*stack_axes, ny, nx) or (*stack_axes, nz, ny, nx)"
             )
 
-        # Build operators
-        nstacks = int(shape[0])
+        # Get shapes
+        nstacks = int(np.prod(shape[:n_stack_axes]))
+        image_shape = shape
+        image_shape_flat = [nstacks] + list(shape[n_stack_axes:-1])
+
+        # Flatten stack axes
+        R = linop.Reshape(image_shape_flat, image_shape)
+
+        # Reshape mask
         if mask is None:
             mask = nstacks * [None]
-        elif np.allclose(mask.shape[:-1], shape[:-1]) is False:
-            raise ValueError(
-                "mask shape must be either (nstacks, ny, nx | 1) or (nstacks, nz, ny, nx | 1)"
-            )
-        _linops = [CartesianMR(shape[n], mask[n], axes, center) for n in range(nstacks)]
+        else:
+            if np.allclose(mask.shape[:-1], shape[:-1]) is False:
+                raise ValueError(
+                    "mask shape must be either (*stack_axes, ny, nx | 1) or (*stack_axes, nz, ny, nx | 1)"
+                )
+            mask = mask.reshape(*image_shape_flat)
 
-        self._linop = _as_stacked(*_linops)
-        super().__init__(self._linop.oshape, self._linop.ishape)
+        # Build list of operators
+        _linops = [
+            R.H * CartesianMR(image_shape_flat[n], mask[n], axes, center) * R
+            for n in range(nstacks)
+        ]
+
+        # Stack list of operators
+        _linop = _as_stacked(*_linops)
+
+        super().__init__(_linop.oshape, _linop.ishape)
+        self._linop = _linop
 
     def _apply(self, input):
         return self._linop._apply(input)
@@ -150,7 +170,10 @@ class NonCartesianMR(linop.Linop):
     weights : ArrayLike | None, optional
         k-space density compensation factors for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation. If provided,
-        must be shaped ``coord.shape[:-1]``
+        must be shaped ``coord.shape[:-1]``.
+    toeplitz : bool | None, optional
+        Use Toeplitz PSF to evaluate normal operator.
+        The default is ``True`` for 2D imaging and ``False`` for 3D.
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
@@ -159,9 +182,6 @@ class NonCartesianMR(linop.Linop):
         Normalize coordinates between ``-pi`` and ``pi``. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
-    toeplitz : bool | None, optional
-        Use Toeplitz PSF to evaluate normal operator.
-        The default is ``True`` for 2D imaging and ``False`` for 3D.
 
     """
 
@@ -170,12 +190,12 @@ class NonCartesianMR(linop.Linop):
         ishape: ArrayLike,
         coord: ArrayLike,
         weights: ArrayLike | None = None,
+        toeplitz: bool | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
         normalize_coord: bool = True,
-        toeplitz: bool | None = None,
     ):
-        if len(ishape) != 2 or len(ishape) != 3:
+        if len(ishape) != 2 and len(ishape) != 3:
             raise ValueError("shape must be either (ny, nx) or (nz, ny, nx)")
 
         # Generate NUFFT operator
@@ -237,7 +257,12 @@ class StackedNonCartesianMR(linop.Linop):
     weights : ArrayLike | None, optional
         k-space density compensation factors for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation. If provided,
-        must be shaped ``coord.shape[:-1]``
+        must be shaped ``coord.shape[:-1]``.
+    n_stack_axes : int, optional
+        Number of axis (starting from left) representing stack dimensions.
+    toeplitz : bool | None, optional
+        Use Toeplitz PSF to evaluate normal operator.
+        The default is ``True`` for 2D imaging and ``False`` for 3D.
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
@@ -246,9 +271,6 @@ class StackedNonCartesianMR(linop.Linop):
         Normalize coordinates between ``-pi`` and ``pi``. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
-    toeplitz : bool | None, optional
-        Use Toeplitz PSF to evaluate normal operator.
-        The default is ``True`` for 2D imaging and ``False`` for 3D.
 
     """
 
@@ -257,23 +279,40 @@ class StackedNonCartesianMR(linop.Linop):
         ishape: ArrayLike,
         coord: ArrayLike,
         weights: ArrayLike | None = None,
+        n_stack_axes: int = 1,
+        toeplitz: bool | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
         normalize_coord: bool = True,
-        toeplitz: bool | None = None,
     ):
-        if len(ishape) != 3 or len(ishape) != 4:
+        if len(ishape) != 2 + n_stack_axes and len(ishape) != 3 + n_stack_axes:
             raise ValueError(
-                "shape must be either (nstacks, ny, nx) or (nstacks, nz, ny, nx)"
+                "shape must be either (*stack_axes, ny, nx) or (*stack_axes, nz, ny, nx)"
             )
 
-        # Build operators
-        nstacks = int(coord.shape[0])
+        # Get shapes
+        nstacks = int(np.prod(ishape[:n_stack_axes]))
+        image_shape = ishape
+        image_shape_flat = [nstacks] + list(ishape[n_stack_axes:-1])
+        signal_shape = coord.shape[:-1]
+        signal_shape_flat = [nstacks] + coord.shape[n_stack_axes:-1]
+
+        # Flatten stack axes
+        Ri = linop.Reshape(image_shape_flat, image_shape)
+        Rk = linop.reshape(signal_shape, signal_shape_flat)
+
+        # Reshape coordinates and weights
+        coord = coord.reshape(nstacks, *signal_shape_flat, -1)
         if weights is None:
             weights = nstacks * [None]
+        else:
+            weights = weights.reshape(nstacks, *signal_shape_flat)
+
+        # Build list of operators
         _linops = [
-            NonCartesianMR(
-                ishape[n],
+            Rk
+            * NonCartesianMR(
+                image_shape_flat[n],
                 coord[n],
                 weights[n],
                 oversamp,
@@ -281,11 +320,24 @@ class StackedNonCartesianMR(linop.Linop):
                 normalize_coord,
                 toeplitz,
             )
+            * Ri
             for n in range(nstacks)
         ]
 
-        self._linop = _as_stacked(*_linops)
-        super().__init__(self._linop.oshape, self._linop.ishape)
+        # Stack list of operators
+        _linop = _as_stacked(*_linops)
+
+        super().__init__(_linop.oshape, _linop.ishape)
+        self._linop = _linop
+        self._nstacks = nstacks
+        self._R = Ri
+
+        if toeplitz is None:
+            if coord.shape[-1] == 2:
+                toeplitz = True
+            else:
+                toeplitz = False
+        self._toeplitz = toeplitz
 
     def _apply(self, input):
         return self._linop._apply(input)
@@ -294,7 +346,19 @@ class StackedNonCartesianMR(linop.Linop):
         return self._linop.H
 
     def _normal_linop(self):
-        return self._linop.N
+        if self._toeplitz is False:
+            return self._linop.N
+
+        # Build list of Toeplitz operators
+        nstacks = self._nstacks
+        R = self._R
+        _linops = [R.H * self._linops.linops[n].linops[1].N * R for n in range(nstacks)]
+
+        # Stack list of Toeplitz operators
+        _linop = _as_stacked(*_linops)
+        _linop.repr_str = "StackedToeplitzOp"
+
+        return linop
 
 
 # %% local utils

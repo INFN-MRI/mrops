@@ -487,7 +487,7 @@ class NonCartesianNlinvOp(BaseNlinvOp):
         except Exception:
             shape = tuple(self.matrix_size)
 
-        return NonCartesianMR(shape, coords, weights, oversamp, eps, toeplitz=True)
+        return NonCartesianMR(shape, coords, weights, True, oversamp, eps)
 
 
 # %% Utility class to enable Toeplitz in NLINV
