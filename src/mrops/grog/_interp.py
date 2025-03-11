@@ -4,6 +4,8 @@ __all__ = ["grog_interp"]
 
 from types import SimpleNamespace
 
+from numpy.typing import ArrayLike
+
 import numpy as np
 import numba as nb
 
@@ -11,53 +13,37 @@ import torch
 
 from mrinufft._array_compat import with_torch, with_numpy_cupy
 
-
+@with_numpy_cupy
 def grog_interp(
-    input,
-    calib,
-    coord,
-    shape,
-    lamda=0.01,
-    nsteps=11,
-    device=None,
-    threadsperblock=128,
-):
+    interpolator: dict,
+    input: ArrayLike,
+    coord: ArrayLike,
+    shape: ArrayLike,
+) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
     """
     GRAPPA Operator Gridding (GROP) interpolation of Non-Cartesian datasets.
 
     Parameters
     ----------
-    input : np.ndarray | torch.Tensor
-        Input Non-Cartesian kspace of shape ``(..., ncontrasts, nviews, nsamples)``.
-    calib : np.ndarray | torch.Tensor
-        Calibration region data of shape ``(nc, nz, ny, nx)`` or ``(nc, ny, nx)``.
-        Usually a small portion from the center of kspace.
-    coord : np.ndarray | torch.Tensor
-        K-space coordinates of shape ``(ncontrasts, nviews, nsamples, ndims)``.
+    interpolator: dict
+        Trained GROG interpolator.
+    input : ArrayLike
+        Input Non-Cartesian kspace.
+    coord : ArrayLike
+        K-space coordinates of shape ``(..., ndims)``.
         Coordinates must be normalized between ``(-0.5 * shape, 0.5 * shape)``.
-    shape : Iterable[int]
+    shape : ArrayLike[int]
         Cartesian grid size of shape ``(ndim,)``.
         If scalar, isotropic matrix is assumed.
-    lamda : float, optional
-        Tikhonov regularization parameter.  Set to 0 for no
-        regularization. Defaults to ``0.01``.
-    nsteps : int, optional
-        K-space interpolation grid discretization. Defaults to ``11``
-        steps (i.e., ``dk = -0.5, -0.4, ..., 0.0, ..., 0.4, 0.5``)
-    device : str, optional
-        Computational device (``cpu`` or ``cuda:n``, with ``n=0, 1,...nGPUs``).
-        The default is ``cpu``.
-    threadsperblock : int
-        CUDA blocks size (for GPU only). The default is ``128``.
 
     Returns
     -------
-    output : np.ndarray | torch.Tensor
-        Output sparse Cartesian kspace of shape ``(..., ncontrasts, nviews, nsamples)``.
+    output : ArrayLike
+        Output sparse Cartesian kspace.
     indexes : np.ndarray | torch.Tensor
-        Sampled k-space points indexes of shape ``(ncontrasts, nviews, nsamples, ndims)``.
+        Sampled k-space points indexes.
     weights : np.ndarray | torch.Tensor
-        Number of occurrences of each k-space sample of shape ``(ncontrasts, nviews, nsamples)``.
+        Number of occurrences of each k-space sample.
 
     Notes
     -----
@@ -74,37 +60,14 @@ def grog_interp(
            resonance in medicine 54.6 (2005): 1553-1556.
 
     """
-    if isinstance(input, np.ndarray):
-        isnumpy = True
-    else:
-        isnumpy = False
-        input = torch.as_tensor(input)
-
-    # get device
-    if device is None:
-        device = input.device
-
-    # cast everything
-    idevice = input.device
-    input = input.to(device)
-    coord = torch.as_tensor(coord, device=device)
-    calib = torch.as_tensor(calib, device=device)
-
-    # default to odds steps to explicitly have 0
-    nsteps = 2 * (nsteps // 2) + 1
-
-    # get number of spatial dimes
     ndim = coord.shape[-1]
-
-    # get grappa operator
-    kern = _calc_grappaop(calib, ndim, lamda, device)
-
+    
     # get coord shape
     cshape = coord.shape
 
     # reshape coordinates
     ishape = input.shape
-    input = input.reshape(*ishape[: -(len(cshape) - 1)], int(np.prod(cshape[:-1])))
+    input = input.reshape(*ishape[: -(len(cshape) - 1)], -1)
 
     # bring coil axes to the front
     input = input[..., None]
@@ -114,21 +77,7 @@ def grog_interp(
         -1, *input.shape[-2:]
     )  # (nslices, nsamples, ncoils) or (nsamples, ncoils)
 
-    # perform product
-    deltas = (torch.arange(nsteps) - (nsteps - 1) // 2) / (nsteps - 1)
 
-    # get Gx, Gy, Gz
-    Gx = _weight_grid(
-        kern.Gx, deltas
-    )  # 2D: (nsteps, nslices, nc, nc); 3D: (nsteps, nc, nc)
-    Gy = _weight_grid(
-        kern.Gy, deltas
-    )  # 2D: (nsteps, nslices, nc, nc); 3D: (nsteps, nc, nc)
-
-    if ndim == 3:
-        Gz = _weight_grid(kern.Gz, deltas)  # (nsteps, nc, nc), 3D only
-    else:
-        Gz = None
 
     # build G
     if ndim == 2:
@@ -138,7 +87,7 @@ def grog_interp(
         Gy = np.repeat(Gy, nsteps, axis=1)  # (nsteps, nsteps, nslices, nc, nc)
         Gx = Gx.reshape(-1, *Gx.shape[-3:])  # (nsteps**2, nslices, nc, nc)
         Gy = Gy.reshape(-1, *Gy.shape[-3:])  # (nsteps**2, nslices, nc, nc)
-        G = Gx @ Gy  # (nsteps**2, nslices, nc, nc)
+        G = Gx @ Gy  # (nsteps**2, nc, nc)
     elif ndim == 3:
         Gx = Gx[None, None, ...]
         Gy = Gy[None, :, None, ...]
