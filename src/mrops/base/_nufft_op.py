@@ -50,7 +50,6 @@ class NUFFT(Linop):
         self.eps = eps
 
         # get input and output shape
-        ishape = ishape
         oshape = list(ishape[: -self.signal_ndim]) + list(coords.shape[:-1])
 
         # build plan
@@ -117,7 +116,6 @@ class NUFFTAdjoint(Linop):
 
         # get input and output shape
         ishape = list(oshape[: -self.signal_ndim]) + list(coords.shape[:-1])
-        oshape = oshape
 
         # build plan
         if plan is not None:
