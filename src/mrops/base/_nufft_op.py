@@ -20,16 +20,14 @@ class NUFFT(Linop):
     ishape : ArrayLike[int] | None, optional
         Input shape. Use ``-1`` to enable broadcasting
         across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    coord : ArrayLike
+    coords : ArrayLike
         Fourier domain coordinate array of shape ``(..., ndim)``.
-        ndim determines the number of dimensions to apply the nufft.
-        ``coord[..., i]`` should be scaled to have its range between
-        ``-n_i // 2``, and ``n_i // 2``.
+        ``ndim`` determines the number of dimensions to apply the NUFFT.
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    normalize_coord : bool, optional
+    normalize_coords : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
@@ -39,28 +37,28 @@ class NUFFT(Linop):
     def __init__(
         self,
         ishape: ArrayLike,
-        coord: ArrayLike,
+        coords: ArrayLike,
         oversamp: float = 1.25,
         eps: float = 1e-3,
         plan: SimpleNamespace | None = None,
-        normalize_coord: bool = True,
+        normalize_coords: bool = True,
     ):
-        self.signal_ndim = coord.shape[-1]
-        self.fourier_ndim = len(coord.shape[:-1])
-        self.coord = coord
+        self.signal_ndim = coords.shape[-1]
+        self.fourier_ndim = len(coords.shape[:-1])
+        self.coords = coords
         self.oversamp = oversamp
         self.eps = eps
 
         # get input and output shape
         ishape = ishape
-        oshape = list(ishape[: -self.signal_ndim]) + list(coord.shape[:-1])
+        oshape = list(ishape[: -self.signal_ndim]) + list(coords.shape[:-1])
 
         # build plan
         if plan is not None:
             self.plan = plan
         else:
             self.plan = __nufft_init__(
-                coord, ishape[-self.signal_ndim :], oversamp, eps, normalize_coord
+                coords, ishape[-self.signal_ndim :], oversamp, eps, normalize_coords
             )
 
         # initalize operator
@@ -68,10 +66,12 @@ class NUFFT(Linop):
 
     def _apply(self, input):
         output = _apply(self.plan, input)
-        return output.reshape(*output.shape[:-1], *self.coord.shape[:-1])
+        return output.reshape(*output.shape[:-1], *self.coords.shape[:-1])
 
     def _adjoint_linop(self):
-        return NUFFTAdjoint(self.ishape, self.coord, self.oversamp, self.eps, self.plan)
+        return NUFFTAdjoint(
+            self.ishape, self.coords, self.oversamp, self.eps, self.plan
+        )
 
     def _normal_linop(self):
         return self.H * self
@@ -86,16 +86,14 @@ class NUFFTAdjoint(Linop):
     oshape : ArrayLike[int] | None, optional
         Output shape. Use ``-1`` to enable broadcasting
         across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    coord : ArrayLike
+    coords : ArrayLike
         Fourier domain coordinate array of shape ``(..., ndim)``.
-        ndim determines the number of dimensions to apply the nufft.
-        ``coord[..., i]`` should be scaled to have its range between
-        ``-n_i // 2``, and ``n_i // 2``.
+        ``ndim`` determines the number of dimensions to apply the NUFFT..
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    normalize_coord : bool, optional
+    normalize_coords : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
@@ -105,20 +103,20 @@ class NUFFTAdjoint(Linop):
     def __init__(
         self,
         oshape: ArrayLike,
-        coord: ArrayLike,
+        coords: ArrayLike,
         oversamp: float = 1.25,
         eps: float = 1e-3,
         plan: SimpleNamespace | None = None,
-        normalize_coord: bool = True,
+        normalize_coords: bool = True,
     ):
-        self.signal_ndim = coord.shape[-1]
-        self.fourier_ndim = len(coord.shape[:-1])
-        self.coord = coord
+        self.signal_ndim = coords.shape[-1]
+        self.fourier_ndim = len(coords.shape[:-1])
+        self.coords = coords
         self.oversamp = oversamp
         self.eps = eps
 
         # get input and output shape
-        ishape = list(oshape[: -self.signal_ndim]) + list(coord.shape[:-1])
+        ishape = list(oshape[: -self.signal_ndim]) + list(coords.shape[:-1])
         oshape = oshape
 
         # build plan
@@ -126,7 +124,7 @@ class NUFFTAdjoint(Linop):
             self.plan = plan
         else:
             self.plan = __nufft_init__(
-                coord, oshape[-self.signal_ndim :], oversamp, eps, normalize_coord
+                coords, oshape[-self.signal_ndim :], oversamp, eps, normalize_coords
             )
 
         # initalize operator
@@ -137,4 +135,4 @@ class NUFFTAdjoint(Linop):
         return _apply_adj(self.plan, input)
 
     def _adjoint_linop(self):
-        return NUFFT(self.oshape, self.coord, self.oversamp, self.eps, self.plan)
+        return NUFFT(self.oshape, self.coords, self.oversamp, self.eps, self.plan)

@@ -4,6 +4,7 @@ __all__ = ["stack"]
 
 from .._sigpy import linop
 
+
 def stack(*operators: list[linop.Linop], axis=0) -> linop.Linop:
     """
     Stack linear operators along axis.

@@ -11,6 +11,7 @@ from .._sigpy import linop
 from ._cart_op import CartesianMR
 from ._stack import stack
 
+
 class StackedCartesianMR(linop.Linop):
     """
     Single coil stacked Cartesian MR operator.

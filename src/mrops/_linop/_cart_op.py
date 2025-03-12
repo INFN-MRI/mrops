@@ -11,6 +11,7 @@ from .._sigpy.linop import Multiply
 
 from ..base import FFT
 
+
 class CartesianMR(linop.Linop):
     """
     Single coil Cartesian MR operator.

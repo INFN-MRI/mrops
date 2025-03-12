@@ -16,6 +16,7 @@ from mrinufft._array_compat import with_numpy_cupy
 from mrinufft.operators.interfaces.utils import is_cuda_array
 
 from .._sigpy.fourier import estimate_shape
+from .._utils import rescale_coords
 
 if mrinufft.check_backend("cufinufft"):
     import cupy as cp
@@ -23,10 +24,10 @@ if mrinufft.check_backend("cufinufft"):
 
 def nufft(
     input: ArrayLike,
-    coord: ArrayLike,
+    coords: ArrayLike,
     oversamp: float = 1.25,
     eps: float = 1e-3,
-    normalize_coord: bool = True,
+    normalize_coords: bool = True,
 ) -> ArrayLike:
     """
     Non-uniform Fast Fourier Transform.
@@ -39,16 +40,14 @@ def nufft(
         where ``ndim`` is specified by ``coord.shape[-1]``. The nufft
         is applied on the last ``ndim axes``, and looped over
         the remaining axes.
-    coord : ArrayLike
+    coords : ArrayLike
         Fourier domain coordinate array of shape ``(..., ndim)``.
-        ndim determines the number of dimensions to apply the nufft.
-        ``coord[..., i]`` should be scaled to have its range between
-        ``-n_i // 2``, and ``n_i // 2``.
+        ``ndim`` determines the number of dimensions to apply the NUFFT.
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    normalize_coord : bool, optional
+    normalize_coords : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
@@ -57,23 +56,23 @@ def nufft(
     -------
     ArrayLike
         Fourier domain data of shape
-        ``input.shape[:-ndim] + coord.shape[:-1]``.
+        ``input.shape[:-ndim] + coords.shape[:-1]``.
 
     """
-    ndim = coord.shape[-1]
+    ndim = coords.shape[-1]
     ishape = input.shape[-ndim:]
-    plan = __nufft_init__(coord, ishape, oversamp, eps, normalize_coord)
+    plan = __nufft_init__(coords, ishape, oversamp, eps, normalize_coords)
     output = _apply(plan, input)
-    return output.reshape(*output.shape[:-1], *coord.shape[:-1])
+    return output.reshape(*output.shape[:-1], *coords.shape[:-1])
 
 
 def nufft_adjoint(
     input: ArrayLike,
-    coord: ArrayLike,
+    coords: ArrayLike,
     oshape: ArrayLike | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-3,
-    normalize_coord: bool = True,
+    normalize_coords: bool = True,
 ) -> ArrayLike:
     """
     Adjoint non-uniform Fast Fourier Transform.
@@ -88,9 +87,7 @@ def nufft_adjoint(
         the remaining axes.
     coord : ArrayLike
         Fourier domain coordinate array of shape ``(..., ndim)``.
-        ndim determines the number of dimensions to apply the nufft.
-        ``coord[..., i]`` should be scaled to have its range between
-        ``-n_i // 2``, and ``n_i // 2``.
+        ``ndim`` determines the number of dimensions to apply the NUFFT.
     oshape : ArrayLike[int] | None, optional
         Output shape of the form ``(..., n_{ndim - 1}, ..., n_1, n_0)``.
         The default is ``None`` (estimated from ``coord``).
@@ -98,7 +95,7 @@ def nufft_adjoint(
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    normalize_coord : bool, optional
+    normalize_coords : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
@@ -107,44 +104,43 @@ def nufft_adjoint(
     -------
     ArrayLike
         Signal domain data of shape
-        ``input.shape[:-ndim] + coord.shape[:-1]``.
+        ``input.shape[:-ndim] + coords.shape[:-1]``.
 
     """
-    fourier_ndim = len(coord) - 1
+    fourier_ndim = len(coords) - 1
     input = input.reshape(*input.shape[:-fourier_ndim], -1)
-    plan = __nufft_init__(coord, oshape, oversamp, eps, normalize_coord)
+    plan = __nufft_init__(coords, oshape, oversamp, eps, normalize_coords)
     return _apply_adj(plan, input)
 
 
 # %% local subroutines
 @with_numpy_cupy
 def __nufft_init__(
-    coord: ArrayLike,
+    coords: ArrayLike,
     shape: ArrayLike | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-6,
-    normalize_coord: bool = True,
+    normalize_coords: bool = True,
 ):
     if shape is None:
-        shape = estimate_shape(coord)
+        shape = estimate_shape(coords)
 
     # enforce single precision
-    coord = coord.astype(np.float32)
+    coords = coords.astype(np.float32)
 
     # normalize
-    if normalize_coord:
-        cmax = ((coord**2).sum(axis=-1) ** 0.5).max()
-        coord = math.pi * coord / cmax
+    if normalize_coords:
+        coords = rescale_coords(coords, 2 * math.pi)
 
     # enforce numpy array for coords
     try:
-        coord = coord.get()
+        coords = coords.get()
     except Exception:
         pass
 
     # prepare CPU nufft
     cpu_nufft = mrinufft.get_operator("finufft")(
-        samples=coord.reshape(-1, coord.shape[-1]),
+        samples=coords.reshape(-1, coords.shape[-1]),
         shape=shape[::-1],
         squeeze_dims=True,
         upsampfac=oversamp,
@@ -153,7 +149,7 @@ def __nufft_init__(
 
     if mrinufft.check_backend("cufinufft"):
         gpu_nufft = mrinufft.get_operator("cufinufft")(
-            samples=coord.reshape(-1, coord.shape[-1]),
+            samples=coords.reshape(-1, coords.shape[-1]),
             shape=shape[::-1],
             squeeze_dims=True,
             upsampfac=oversamp,

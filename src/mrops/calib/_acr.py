@@ -8,6 +8,7 @@ from numpy.typing import ArrayLike
 from mrinufft._array_compat import with_numpy_cupy
 
 from .. import _sigpy
+from .._utils import rescale_coords
 
 
 @with_numpy_cupy
@@ -36,7 +37,7 @@ def extract_acr(
     mask : ArrayLike, optional
         Sampling mask for Cartesian datasets of shape ``(..., *shape)``.
     coords : ArrayLike, optional
-        K-space trajectory of shape ``(..., npts, ndim)``, normalized between ``(-0.5, 0.5)``.
+        Fourier domain coordinate array of shape ``(..., npts, ndim)``.
         Required for Non Cartesian datasets. The default is ``None``.
     weights : ArrayLike, optional
         K-space density compensation of shape ``(..., npts)``. The default is ``None``.
@@ -79,6 +80,9 @@ def extract_acr(
             raise ValueError("Please provide matrix size for Non Cartesian datasets")
 
         # get indexes for calibration samples
+        coords = rescale_coords(
+            coords, shape
+        )  # enforce scaling between (-0.5 * npix, 0.5 * npix)
         cal_idx = (coords**2).sum(axis=-1) ** 0.5 <= (0.5 * cal_width)
         cal_idx = cal_idx.reshape(-1, cal_idx.shape[-1])
         cal_idx = np.prod(cal_idx, axis=0).astype(bool)

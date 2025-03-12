@@ -1,6 +1,6 @@
 """GRAPPA operator training. Adapted for convenience from PyGRAPPA."""
 
-__all__ = ["grog_train"]
+__all__ = ["train"]
 
 from numpy.typing import ArrayLike
 
@@ -10,7 +10,7 @@ from mrinufft._array_compat import with_numpy
 
 
 @with_numpy
-def grog_train(train_data: ArrayLike, lamda: float = 0.01, nsteps: int = 11) -> dict:
+def train(train_data: ArrayLike, lamda: float = 0.01, nsteps: int = 11) -> dict:
     """
     Train GRAPPA Operator Gridding (GROG) interpolator.
 
@@ -55,10 +55,12 @@ def grog_train(train_data: ArrayLike, lamda: float = 0.01, nsteps: int = 11) -> 
 
     # build interpolator
     deltas = (np.arange(nsteps) - (nsteps - 1) // 2) / (nsteps - 1)
-    Gx = _weight_grid(kern["Gx"], deltas)  # (nsteps, nc, nc)
-    Gy = _weight_grid(kern["Gy"], deltas)  # (nsteps, nc, nc)
+    Gx = _weight_grid(kern["Gx"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
+    Gy = _weight_grid(kern["Gy"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
     if ndim == 3:
-        Gz = _weight_grid(kern["Gz"], deltas)  # (nsteps, nc, nc), 3D only
+        Gz = _weight_grid(kern["Gz"], deltas).astype(
+            np.complex64
+        )  # (nsteps, nc, nc), 3D only
     else:
         Gz = None
 
@@ -67,10 +69,6 @@ def grog_train(train_data: ArrayLike, lamda: float = 0.01, nsteps: int = 11) -> 
 
 # %% subroutines
 def _calc_grappaop(ndim, train_data, lamda):
-    if ndim == 2:
-        train_data = train_data[:, None, :, :].copy()
-
-    # compute kernels
     if ndim == 2:
         gz = None
         gy, gx = _grappa_op_2d(train_data, lamda)
@@ -138,14 +136,12 @@ def _grappa_op_3d(calib, lamda):
     return Gz.clone(), Gy.clone(), Gx.clone()
 
 
-def _weight_grid(A, weight):
-    L, V = np.linalg.eig(A)
+def _weight_grid(G, weight):
+    V, E = np.linalg.eig(G)
 
     # raise to power along expanded first dim
-    L = L[None, ...] ** weight[:, None, None]
-
-    # unsqueeze batch dimension for V
-    V = V[None, ...]
+    V = V ** weight[:, None]
+    V = np.apply_along_axis(np.diag, 1, V)
 
     # put together and return
-    return V @ np.diagonal(L) @ np.linalg.inv(V)
+    return E @ V @ np.linalg.inv(E)

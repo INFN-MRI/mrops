@@ -11,6 +11,7 @@ from .._sigpy import linop
 from ._noncart_op import NonCartesianMR
 from ._stack import stack
 
+
 class StackedNonCartesianMR(linop.Linop):
     """
     Single coil stacked Non Cartesian MR operator.
@@ -19,13 +20,13 @@ class StackedNonCartesianMR(linop.Linop):
     ----------
     ishape : ArrayLike[int] | None, optional
         Input shape ``(nstacks, ny, nx)`` (2D) or ``(nstacks, nz, ny, nx)`` (3D).
-    coord : ArrayLike
+    coords : ArrayLike
         Fourier domain coordinate array of shape ``(nstacks, ..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT.
     weights : ArrayLike | None, optional
-        k-space density compensation factors for NUFFT (``None`` for Cartesian).
+        Fourier domain density compensation array for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation. If provided,
-        must be shaped ``coord.shape[:-1]``.
+        must be shaped ``coords.shape[:-1]``.
     n_stack_axes : int, optional
         Number of axis (starting from left) representing stack dimensions.
     toeplitz : bool | None, optional
@@ -45,13 +46,13 @@ class StackedNonCartesianMR(linop.Linop):
     def __init__(
         self,
         ishape: ArrayLike,
-        coord: ArrayLike,
+        coords: ArrayLike,
         weights: ArrayLike | None = None,
         n_stack_axes: int = 1,
         toeplitz: bool | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
-        normalize_coord: bool = True,
+        normalize_coords: bool = True,
     ):
         if len(ishape) != 2 + n_stack_axes and len(ishape) != 3 + n_stack_axes:
             raise ValueError(
@@ -62,15 +63,15 @@ class StackedNonCartesianMR(linop.Linop):
         nstacks = int(np.prod(ishape[:n_stack_axes]))
         image_shape = ishape
         image_shape_flat = [nstacks] + list(ishape[n_stack_axes:-1])
-        signal_shape = coord.shape[:-1]
-        signal_shape_flat = [nstacks] + coord.shape[n_stack_axes:-1]
+        signal_shape = coords.shape[:-1]
+        signal_shape_flat = [nstacks] + coords.shape[n_stack_axes:-1]
 
         # Flatten stack axes
         Ri = linop.Reshape(image_shape_flat, image_shape)
         Rk = linop.reshape(signal_shape, signal_shape_flat)
 
         # Reshape coordinates and weights
-        coord = coord.reshape(nstacks, *signal_shape_flat, -1)
+        coords = coords.reshape(nstacks, *signal_shape_flat, -1)
         if weights is None:
             weights = nstacks * [None]
         else:
@@ -81,11 +82,11 @@ class StackedNonCartesianMR(linop.Linop):
             Rk
             * NonCartesianMR(
                 image_shape_flat[n],
-                coord[n],
+                coords[n],
                 weights[n],
                 oversamp,
                 eps,
-                normalize_coord,
+                normalize_coords,
                 toeplitz,
             )
             * Ri
@@ -101,7 +102,7 @@ class StackedNonCartesianMR(linop.Linop):
         self._R = Ri
 
         if toeplitz is None:
-            if coord.shape[-1] == 2:
+            if coords.shape[-1] == 2:
                 toeplitz = True
             else:
                 toeplitz = False
@@ -127,4 +128,3 @@ class StackedNonCartesianMR(linop.Linop):
         _linop.repr_str = "StackedToeplitzOp"
 
         return linop
-

@@ -47,6 +47,7 @@ def nlinv_calib(
     show_pbar: bool = False,
     leave_pbar: bool = True,
     record_time: bool = False,
+    ret_image: bool = False,
 ) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
     """
     Estimate coil sensitivity maps using NLINV.
@@ -67,9 +68,11 @@ def nlinv_calib(
         Image dimensions (e.g., ``(nz, ny, nx)`` for 3D or ``(ny, nx)`` for 2D).
         Used for Non Cartesian only.
     coords : ArrayLike, optional
-        k-space trajectory for NUFFT (``None`` for Cartesian).
+        Fourier domain coordinate array of shape ``(..., ndim)``.
+        ``ndim`` determines the number of dimensions to apply the NUFFT
+        (``None`` for Cartesian).
     weights : ArrayLike, optional
-        k-space density compensation factors for NUFFT (``None`` for Cartesian).
+        Fourier domain density compensation array for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation.
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
@@ -99,7 +102,9 @@ def nlinv_calib(
     leave_pbar : bool, optional
         Toggle whether to leave progress bar after finished (default is ``True``).
     record_time : bool, optional
-        Toggle wheter record runtime (default is ``False``).
+        Toggle whether record runtime (default is ``False``).
+    ret_image : bool, optional
+        Toggle whether returning reconstructed image (default is ``False``).
 
     Returns
     -------
@@ -160,7 +165,7 @@ def nlinv_calib(
         record_time,
     ).run()
 
-    return _postprocess_output(NONCART, _nlinv, xhat, yscale, cshape, oshape)
+    return _postprocess_output(NONCART, _nlinv, xhat, yscale, cshape, oshape, ret_image)
 
 
 def _setup_cartesian(y, ndim, mask, cal_width, sobolev_width, sobolev_deg):  # noqa
@@ -280,7 +285,9 @@ def _initialize_guess(device, n_coils, shape, xp, dtype):  # noqa
     return xhat0
 
 
-def _postprocess_output(NONCART, _nlinv, xhat, yscale, cal_width, oshape):  # noqa
+def _postprocess_output(
+    NONCART, _nlinv, xhat, yscale, cal_width, oshape, ret_image
+):  # noqa
     """Post-process results and return sensitivity maps and calibration region."""
     x = _nlinv.W(xhat) / yscale
 
@@ -310,7 +317,9 @@ def _postprocess_output(NONCART, _nlinv, xhat, yscale, cal_width, oshape):  # no
         norm="ortho",
     )
 
-    return smaps, grappa_train, rho
+    if ret_image:
+        return smaps, grappa_train, rho
+    return smaps, grappa_train
 
 
 def simu(x, y):
@@ -427,7 +436,7 @@ class BaseNlinvOp(NonLinop):
 
         # Build operators
         FH = IFFT(shape, axes=tuple(range(-n_dims, 0)))
-        W = linop.Multiply(shape, weights)
+        W = linop.Multiply(shape, weights.astype(xp.float32))
         return FH * W
 
     def _compute_forward(self, xhat):

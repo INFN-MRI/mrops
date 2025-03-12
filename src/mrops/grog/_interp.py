@@ -1,24 +1,25 @@
 """GRAPPA operator based interpolation. Adapted for convenience from PyGRAPPA."""
 
-__all__ = ["grog_interp"]
-
-from types import SimpleNamespace
+__all__ = ["interp"]
 
 from numpy.typing import ArrayLike
 
 import numpy as np
 import numba as nb
 
-import torch
+from mrinufft._array_compat import with_numpy_cupy, CUPY_AVAILABLE
 
-from mrinufft._array_compat import with_torch, with_numpy_cupy
+from .._sigpy import get_device
+from .._utils import rescale_coords
+
 
 @with_numpy_cupy
-def grog_interp(
+def interp(
     interpolator: dict,
     input: ArrayLike,
-    coord: ArrayLike,
+    coords: ArrayLike,
     shape: ArrayLike,
+    threadsperblock: int = 128,
 ) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
     """
     GRAPPA Operator Gridding (GROP) interpolation of Non-Cartesian datasets.
@@ -29,12 +30,13 @@ def grog_interp(
         Trained GROG interpolator.
     input : ArrayLike
         Input Non-Cartesian kspace.
-    coord : ArrayLike
-        K-space coordinates of shape ``(..., ndims)``.
-        Coordinates must be normalized between ``(-0.5 * shape, 0.5 * shape)``.
+    coords : ArrayLike
+        Fourier domain coordinates array of shape ``(..., ndims)``.
     shape : ArrayLike[int]
         Cartesian grid size of shape ``(ndim,)``.
         If scalar, isotropic matrix is assumed.
+    threadsperblock : int, optional
+        Number of CUDA threads per block. The default is ``128``.
 
     Returns
     -------
@@ -60,35 +62,39 @@ def grog_interp(
            resonance in medicine 54.6 (2005): 1553-1556.
 
     """
-    ndim = coord.shape[-1]
-    
-    # get coord shape
-    cshape = coord.shape
+    device = get_device(input)
+    xp = device.xp
 
-    # reshape coordinates
-    ishape = input.shape
-    input = input.reshape(*ishape[: -(len(cshape) - 1)], -1)
+    # get number of spatial dims
+    ndim = coords.shape[-1]
 
-    # bring coil axes to the front
-    input = input[..., None]
-    input = input.swapaxes(-3, -1)
-    dshape = input.shape
-    input = input.reshape(
-        -1, *input.shape[-2:]
-    )  # (nslices, nsamples, ncoils) or (nsamples, ncoils)
+    # get batch shape and signal shape
+    signal_shape = coords.shape[:-1]
+    batch_shape = input.shape[: -len(signal_shape) - 1]
 
+    # reshape data and coordinates
+    n_coils = input.shape[-len(signal_shape) - 1]
+    n_batchs = int(np.prod(batch_shape))
+    input = input.reshape(n_batchs, n_coils, -1)
+    coords = coords.reshape(-1, ndim)
 
+    # transpose to (n_samples, n_batches, n_coils)
+    input = input.transpose(2, 0, 1)
+    input = xp.ascontiguousarray(input)
 
     # build G
+    nsteps = interpolator["x"].shape[0]
     if ndim == 2:
+        Gx, Gy = interpolator["x"], interpolator["y"]
         Gx = Gx[None, ...]
         Gy = Gy[:, None, ...]
-        Gx = np.repeat(Gx, nsteps, axis=0)  # (nsteps, nsteps, nslices, nc, nc)
-        Gy = np.repeat(Gy, nsteps, axis=1)  # (nsteps, nsteps, nslices, nc, nc)
-        Gx = Gx.reshape(-1, *Gx.shape[-3:])  # (nsteps**2, nslices, nc, nc)
-        Gy = Gy.reshape(-1, *Gy.shape[-3:])  # (nsteps**2, nslices, nc, nc)
+        Gx = np.repeat(Gx, nsteps, axis=0)  # (nsteps, nsteps, nc, nc)
+        Gy = np.repeat(Gy, nsteps, axis=1)  # (nsteps, nsteps, nc, nc)
+        Gx = Gx.reshape(-1, *Gx.shape[-2:])  # (nsteps**2, nc, nc)
+        Gy = Gy.reshape(-1, *Gy.shape[-2:])  # (nsteps**2, nc, nc)
         G = Gx @ Gy  # (nsteps**2, nc, nc)
     elif ndim == 3:
+        Gx, Gy, Gz = interpolator["x"], interpolator["y"], interpolator["z"]
         Gx = Gx[None, None, ...]
         Gy = Gy[None, :, None, ...]
         Gz = Gz[:, None, None, ...]
@@ -104,215 +110,74 @@ def grog_interp(
         G = Gx @ Gy @ Gz  # (nsteps**3, nc, nc)
 
     # build indexes
-    indexes = torch.round(coord)
-    lut = indexes - coord
-    lut = torch.floor(10 * lut).to(int) + int(nsteps // 2)
-    lut = lut.reshape(-1, ndim)  # (nsamples, ndim)
-    lut = lut * torch.as_tensor([1, nsteps, nsteps**2])[:ndim]
-    lut = lut.sum(axis=-1)
+    coords = rescale_coords(coords, shape)
+    indexes = xp.round(coords)
 
-    if ndim == 2:
-        input = input.swapaxes(0, 1)  # (nsamples, nslices, ncoils)
+    with device:
+        lut = indexes - coords
+        lut = xp.floor(10 * lut, dtype=xp.float32) + nsteps // 2
+        lut = lut * xp.asarray([1, nsteps, nsteps**2], dtype=xp.float32)[:ndim]
+        lut = lut.sum(axis=-1).astype(int)
 
-    # perform interpolation
-    if device == "cpu" or device == torch.device("cpu"):
-        output = do_interpolation(input, G, lut)
-    else:
-        output = do_interpolation_cuda(input, G, lut, threadsperblock)
+        # perform interpolation
+        if device.id < 0:
+            output = do_interpolation(input, G, lut)
+        else:
+            output = do_interpolation_cuda(input, G, lut, threadsperblock)
 
-    # finalize indexes
-    if np.isscalar(shape):
-        shape = [shape] * ndim
-    indexes = indexes + torch.as_tensor(list(shape[-ndim:])[::-1]) // 2
-    indexes = indexes.to(int)
+        # finalize indexes
+        if xp.isscalar(shape):
+            shape = [shape] * ndim
+        else:
+            shape = list(shape)[-ndim:]
+            shape = shape[::-1]
+        indexes = indexes + xp.asarray(shape, dtype=indexes.dtype) // 2
+        indexes = indexes.astype(int)
 
-    # flatten indexes
-    unfolding = [1] + list(np.cumprod(list(shape)[::-1]))[: ndim - 1]
-    flattened_idx = torch.as_tensor(unfolding, dtype=int) * indexes
-    flattened_idx = flattened_idx.sum(axis=-1).flatten()
+        # ravel indexes
+        unfolding = [1] + shape[: ndim - 1]
+        flattened_idx = xp.asarray(unfolding, dtype=indexes.dtype) * indexes
+        flattened_idx = flattened_idx.sum(axis=-1)
 
     # count elements
-    _, idx, counts = torch.unique(
-        flattened_idx, return_inverse=True, return_counts=True
-    )
-    weights = counts[idx]
+    _, idx, counts = xp.unique(flattened_idx, return_inverse=True, return_counts=True)
 
-    # count
-    weights = weights.reshape(*indexes.shape[:-1])
-    weights = weights.to(torch.float32)
+    # compute weights
+    weights = counts[idx].astype(xp.float32)
     weights = 1 / weights
 
-    # finalize
-    if ndim == 2:
-        output = output.swapaxes(0, 1)  # (nslices, nsamples, ncoils)
-    output = output.reshape(*dshape)
-    output = output.swapaxes(-3, -1)
-    output = output[..., 0]
-    output = output.reshape(ishape)
+    # reformat shape
+    output = output.transpose(1, 2, 0)  # (n_batches, n_coils, n_samples)
+    output = output.reshape(*batch_shape, n_coils, *signal_shape)
+    indexes = indexes.reshape(*signal_shape, ndim)
+    weights = weights.reshape(*signal_shape)
 
     # remove out-of-boundaries
-    shape = list(shape[-ndim:])[::-1]  # (x, y, z)
     for n in range(ndim):
+        # below minimum
         outside = indexes[..., n] < 0
         output[..., outside] = 0.0
-        indexes[..., n][outside] = 0
+        indexes[..., n][outside] = 0  # collapse to minimum
+        # weights[outside] = 0.0
+
+        # above maximum
         outside = indexes[..., n] >= shape[n]
-        indexes[..., n][outside] = shape[n] - 1
         output[..., outside] = 0.0
+        indexes[..., n][outside] = shape[n] - 1  # collapse to maxmum
+        # weights[outside] = 0.0
 
-    # cast back to original device
-    output = output.to(idevice)
-    indexes = indexes.to(idevice)
-    weights = weights.to(idevice)
-
-    # if required, cast back to numpy
-    if isnumpy:
-        output = output.numpy(force=True)
-        indexes = indexes.to(idevice)
-        weights = weights.to(idevice)
+    # enforce contiguity
+    output = xp.ascontiguousarray(output)
+    indexes = xp.ascontiguousarray(indexes)
+    weights = xp.ascontiguousarray(weights)
 
     return output, indexes, weights
 
 
 # %% subroutines
-def _calc_grappaop(calib, ndim, lamda, device):
-    # as Tensor
-    calib = torch.as_tensor(calib, device=device)
-
-    # expand
-    if len(calib.shape) == 3:  # single slice (nc, ny, nx)
-        calib = calib[:, None, :, :].clone()
-
-    # compute kernels
-    if ndim == 2:
-        gy, gx = _grappa_op_2d(calib, lamda)
-    elif ndim == 3:
-        gz, gy, gx = _grappa_op_3d(calib, lamda)
-
-    # prepare output
-    GrappaOp = SimpleNamespace(Gx=gx, Gy=gy)
-    # GrappaOp.Gx, GrappaOp.Gy = (gx.numpy(force=True), gy.numpy(force=True))
-
-    if ndim == 3:
-        GrappaOp.Gz = gz  # .numpy(force=True)
-    else:
-        GrappaOp.Gz = None
-
-    return GrappaOp
-
-
-def _grappa_op_2d(calib, lamda):
-    """Return a batch of 2D GROG operators (one for each z)."""
-    # coil axis in the back
-    calib = torch.moveaxis(calib, 0, -1)
-    nz, _, _, nc = calib.shape[:]
-
-    # we need sources (last source has no target!)
-    Sy = torch.reshape(calib[:, :-1, :, :], (nz, -1, nc))
-    Sx = torch.reshape(calib[:, :, :-1, :], (nz, -1, nc))
-
-    # and we need targets for an operator along each axis (first
-    # target has no associated source!)
-    Ty = torch.reshape(calib[:, 1:, :, :], (nz, -1, nc))
-    Tx = torch.reshape(calib[:, :, 1:, :], (nz, -1, nc))
-
-    # train the operators:
-    Syh = Sy.conj().permute(0, 2, 1)
-    lamda0 = lamda * torch.linalg.norm(Syh, dim=(1, 2)) / Syh.shape[1]
-    Gy = torch.linalg.solve(
-        _bdot(Syh, Sy) + lamda0[:, None, None] * torch.eye(Syh.shape[1])[None, ...],
-        _bdot(Syh, Ty),
-    )
-
-    Sxh = Sx.conj().permute(0, 2, 1)
-    lamda0 = lamda * torch.linalg.norm(Sxh, dim=(1, 2)) / Sxh.shape[1]
-    Gx = torch.linalg.solve(
-        _bdot(Sxh, Sx) + lamda0[:, None, None] * torch.eye(Sxh.shape[1])[None, ...],
-        _bdot(Sxh, Tx),
-    )
-
-    return Gy.clone(), Gx.clone()
-
-
-def _grappa_op_3d(calib, lamda):
-    """Return 3D GROG operator."""
-    # coil axis in the back
-    calib = torch.moveaxis(calib, 0, -1)
-    _, _, _, nc = calib.shape[:]
-
-    # we need sources (last source has no target!)
-    Sz = torch.reshape(calib[:-1, :, :, :], (-1, nc))
-    Sy = torch.reshape(calib[:, :-1, :, :], (-1, nc))
-    Sx = torch.reshape(calib[:, :, :-1, :], (-1, nc))
-
-    # and we need targets for an operator along each axis (first
-    # target has no associated source!)
-    Tz = torch.reshape(calib[1:, :, :, :], (-1, nc))
-    Ty = torch.reshape(calib[:, 1:, :, :], (-1, nc))
-    Tx = torch.reshape(calib[:, :, 1:, :], (-1, nc))
-
-    # train the operators:
-    Szh = Sz.conj().permute(1, 0)
-    lamda0 = lamda * torch.linalg.norm(Szh) / Szh.shape[0]
-    Gz = torch.linalg.solve(Szh @ Sz + lamda0 * torch.eye(Szh.shape[0]), Szh @ Tz)
-
-    Syh = Sy.conj().permute(1, 0)
-    lamda0 = lamda * torch.linalg.norm(Syh) / Syh.shape[0]
-    Gy = torch.linalg.solve(Syh @ Sy + lamda0 * torch.eye(Syh.shape[0]), Syh @ Ty)
-
-    Sxh = Sx.conj().permute(1, 0)
-    lamda0 = lamda * torch.linalg.norm(Sxh) / Sxh.shape[0]
-    Gx = torch.linalg.solve(Sxh @ Sx + lamda0 * torch.eye(Sxh.shape[0]), Sxh @ Tx)
-
-    return Gz.clone(), Gy.clone(), Gx.clone()
-
-
-def _bdot(a, b):
-    return torch.einsum("...ij,...jk->...ik", a, b)
-
-
-def _weight_grid(A, weight):
-    # decompose
-    L, V = torch.linalg.eig(A)
-
-    # raise to power along expanded first dim
-    if len(L.shape) == 2:  # 3D case, (nc, nc)
-        L = L[None, ...] ** weight[:, None, None]
-    else:  # 2D case, (nslices, nc, nc)
-        L = L[None, ...] ** weight[:, None, None, None]
-
-    # unsqueeze batch dimension for V
-    V = V[None, ...]
-
-    # put together and return
-    return V @ torch.diag_embed(L) @ torch.linalg.inv(V)
-
-
-# def _weight_grid(A, weight):
-#     return np.stack([_matrix_power(A, w) for w in weight], axis=0)
-
-
-# def _matrix_power(A, t):
-#     if len(A.shape) == 2:
-#         return scipy.linalg.fractional_matrix_power(A, t)
-#     else:
-#         return np.stack([scipy.linalg.fractional_matrix_power(a, t) for a in A])
-
-
 def do_interpolation(noncart, G, lut):
-    cart = torch.zeros(noncart.shape, dtype=noncart.dtype, device=noncart.device)
-    cart = backend.pytorch2numba(cart)
-    G = backend.pytorch2numba(G)
-    noncart = backend.pytorch2numba(noncart)
-    lut = backend.pytorch2numba(lut)
-
+    cart = np.zeros(noncart.shape, dtype=noncart.dtype)
     _interp(cart, noncart, G, lut)
-
-    noncart = backend.numba2pytorch(noncart)
-    G = backend.numba2pytorch(G)
-    cart = backend.numba2pytorch(cart)
-    lut = backend.numba2pytorch(lut)
-
     return cart
 
 
@@ -337,37 +202,22 @@ def _interp(data_out, data_in, interp, lut):
         batch = i % batch_size
         idx = lut[sample]
 
-        _dot_product(
-            data_out[sample][batch], data_in[sample][batch], interp[idx][batch]
-        )
+        _dot_product(data_out[sample][batch], data_in[sample][batch], interp[idx])
 
 
 # %% CUDA
-if torch.cuda.is_available():
+if CUPY_AVAILABLE:
     from numba import cuda
 
     def do_interpolation_cuda(noncart, G, lut, threadsperblock):
-        # calculate size
-        nsamples, batch_size, ncoils = noncart.shape
-
-        # define number of blocks
         blockspergrid = (
-            (nsamples * batch_size) + (threadsperblock - 1)
+            np.prod(noncart.shape[-2:]) + (threadsperblock - 1)
         ) // threadsperblock
+        blockspergrid = int(blockspergrid)
 
-        cart = torch.zeros(noncart.shape, dtype=noncart.dtype, device=noncart.device)
-        cart = backend.pytorch2numba(cart)
-        G = backend.pytorch2numba(G)
-        noncart = backend.pytorch2numba(noncart)
-        lut = backend.pytorch2numba(lut)
-
-        # run kernel
-        _interp_cuda[blockspergrid, threadsperblock](cart, noncart, G, lut)
-
-        noncart = backend.numba2pytorch(noncart)
-        G = backend.numba2pytorch(G)
-        cart = backend.numba2pytorch(cart)
-        lut = backend.numba2pytorch(lut)
+        with get_device(noncart) as device:
+            cart = device.xp.zeros(noncart.shape, dtype=noncart.dtype)
+            _interp_cuda[blockspergrid, threadsperblock](cart, noncart, G, lut)
 
         return cart
 
@@ -393,5 +243,5 @@ if torch.cuda.is_available():
             idx = lut[sample]
 
             _dot_product_cuda(
-                data_out[sample][batch], data_in[sample][batch], interp[idx][batch]
+                data_out[sample][batch], data_in[sample][batch], interp[idx]
             )

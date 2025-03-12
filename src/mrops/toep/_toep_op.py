@@ -21,19 +21,17 @@ class ToeplitzOp(linop.Linop):
     shape : ArrayLike[int] | None, optional
         Input shape. Use ``-1`` to enable broadcasting
         across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    coord : ArrayLike
+    coords : ArrayLike
         Fourier domain coordinate array of shape ``(..., ndim)``.
-        ndim determines the number of dimensions to apply the nufft.
-        ``coord[..., i]`` should be scaled to have its range between
-        ``-n_i // 2``, and ``n_i // 2``.
+        ``ndim`` determines the number of dimensions to apply the NUFFT.
     weights : ArrayLike | None, optional
-        k-space density compensation factors for NUFFT (``None`` for Cartesian).
+        Fourier domain density compensation array for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation.
     oversamp : float, optional
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    normalize_coord : bool, optional
+    normalize_coords : bool, optional
         Normalize coordinates between -pi and pi. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
@@ -43,18 +41,18 @@ class ToeplitzOp(linop.Linop):
     def __init__(
         self,
         shape: ArrayLike,
-        coord: ArrayLike,
+        coords: ArrayLike,
         weights: ArrayLike | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
-        normalize_coord: bool = True,
+        normalize_coords: bool = True,
     ):
-        ndim = coord.shape[-1]
+        ndim = coords.shape[-1]
         fft_axes = tuple(range(-1, -(ndim + 1), -1))
 
         # Generate PSF kernel
         psf = calc_toeplitz_kernel(
-            coord, shape, weights, oversamp, eps, normalize_coord
+            coords, shape, weights, oversamp, eps, normalize_coords
         )
 
         # Compose operator

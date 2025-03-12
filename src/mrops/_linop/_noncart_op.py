@@ -11,6 +11,7 @@ from ..base import NUFFT
 
 from ..toep import ToeplitzOp
 
+
 class NonCartesianMR(linop.Linop):
     """
     Single coil Non Cartesian MR operator.
@@ -19,13 +20,13 @@ class NonCartesianMR(linop.Linop):
     ----------
     ishape : ArrayLike[int] | None, optional
         Input shape ``(ny, nx)`` (2D) or ``(nz, ny, nx)`` (3D).
-    coord : ArrayLike
+    coords : ArrayLike
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT.
     weights : ArrayLike | None, optional
-        k-space density compensation factors for NUFFT (``None`` for Cartesian).
+        Fourier domain density compensation array for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation. If provided,
-        must be shaped ``coord.shape[:-1]``.
+        must be shaped ``coords.shape[:-1]``.
     toeplitz : bool | None, optional
         Use Toeplitz PSF to evaluate normal operator.
         The default is ``True`` for 2D imaging and ``False`` for 3D.
@@ -33,7 +34,7 @@ class NonCartesianMR(linop.Linop):
         Oversampling factor. The default is ``1.25``.
     eps : float, optional
         Desired numerical precision. The default is ``1e-6``.
-    normalize_coord : bool, optional
+    normalize_coords : bool, optional
         Normalize coordinates between ``-pi`` and ``pi``. If ``False``,
         assume they are correctly normalized already. The default
         is ``True``.
@@ -43,18 +44,18 @@ class NonCartesianMR(linop.Linop):
     def __init__(
         self,
         ishape: ArrayLike,
-        coord: ArrayLike,
+        coords: ArrayLike,
         weights: ArrayLike | None = None,
         toeplitz: bool | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,
-        normalize_coord: bool = True,
+        normalize_coords: bool = True,
     ):
         if len(ishape) != 2 and len(ishape) != 3:
             raise ValueError("shape must be either (ny, nx) or (nz, ny, nx)")
 
         # Generate NUFFT operator
-        F = NUFFT(ishape, coord, oversamp, eps, normalize_coord=normalize_coord)
+        F = NUFFT(ishape, coords, oversamp, eps, normalize_coords=normalize_coords)
 
         # Density compensation
         if weights is not None:
@@ -65,14 +66,14 @@ class NonCartesianMR(linop.Linop):
         super().__init__(PF.oshape, PF.ishape)
         self._linop = PF
         self._shape = ishape
-        self._coord = coord
+        self._coords = coords
         self._weights = weights
         self._oversamp = oversamp
         self._eps = eps
-        self._normalize_coord = normalize_coord
+        self._normalize_coords = normalize_coords
 
         if toeplitz is None:
-            if coord.shape[-1] == 2:
+            if coords.shape[-1] == 2:
                 toeplitz = True
             else:
                 toeplitz = False
@@ -90,9 +91,9 @@ class NonCartesianMR(linop.Linop):
 
         return ToeplitzOp(
             self._shape,
-            self._coord,
+            self._coords,
             self._weights,
             self._oversamp,
             self._eps,
-            self._normalize_coord,
+            self._normalize_coords,
         )
