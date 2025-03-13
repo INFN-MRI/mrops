@@ -40,10 +40,11 @@ class MultiIndex(Linop):
 
         # initalize operator
         super().__init__(oshape, ishape)
-        if output is not None:
-            with get_device(indexes) as device:
+        if output is None:
+            device = get_device(indexes)
+            with device:
                 xp = device.xp
-                self._output = xp.zeros(ishape, dtype=xp.float32)
+                self._output = xp.zeros(ishape, dtype=xp.complex64)
         else:
             self._output = output
 
@@ -87,15 +88,16 @@ class MultiGrid(Linop):
 
         # initalize operator
         super().__init__(oshape, ishape)
-        if output is not None:
-            with get_device(indexes) as device:
+        if output is None:
+            device = get_device(indexes)
+            with device:
                 xp = device.xp
-                self._output = xp.zeros(oshape, dtype=xp.float32)
+                self._output = xp.zeros(oshape, dtype=xp.complex64)
         else:
             self._output = output
 
     def _apply(self, input):
-        return multi_grid(input, self.indexes, self._output)
+        return multi_grid(input, self.indexes, self.oshape, self._output)
 
     def _adjoint_linop(self):
         return MultiIndex(self.oshape, self.indexes, self._output)

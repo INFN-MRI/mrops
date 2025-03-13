@@ -55,12 +55,11 @@ def GrogMR(
     output, indexes, weights = grog.interp(interpolator, input, coords, ishape)
 
     # build operators
-    W = linop.Multiply(weights.shape, weights**0.5)
     I = MultiIndex(ishape, indexes)
     F = FFT(ishape, axes=tuple(range(-ndim, 0)))
 
     # assemble GROG operator
-    G = W * I * F
+    G = I * F
 
     # add batch axes
     batch_axes = input.shape[: -len(indexes.shape[:-1])]
@@ -70,4 +69,4 @@ def GrogMR(
     # improve representation
     G.repr_str = "GROG Linop"
 
-    return weights**0.5 * output, G
+    return weights * output, G

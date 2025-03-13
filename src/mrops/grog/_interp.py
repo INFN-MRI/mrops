@@ -135,7 +135,7 @@ def interp(
         indexes = indexes.astype(int)
 
         # ravel indexes
-        unfolding = [1] + shape[: ndim - 1]
+        unfolding = xp.cumprod([1] + shape[: ndim - 1])
         flattened_idx = xp.asarray(unfolding, dtype=indexes.dtype) * indexes
         flattened_idx = flattened_idx.sum(axis=-1)
 

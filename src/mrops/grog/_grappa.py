@@ -121,19 +121,19 @@ def _grappa_op_3d(calib, lamda):
     Tx = np.reshape(calib[:, :, 1:, :], (-1, nc))
 
     # train the operators:
-    Szh = Sz.conj().permute(1, 0)
+    Szh = Sz.conj().T
     lamda0 = lamda * np.linalg.norm(Szh) / Szh.shape[0]
     Gz = np.linalg.solve(Szh @ Sz + lamda0 * np.eye(Szh.shape[0]), Szh @ Tz)
 
-    Syh = Sy.conj().permute(1, 0)
+    Syh = Sy.conj().T
     lamda0 = lamda * np.linalg.norm(Syh) / Syh.shape[0]
     Gy = np.linalg.solve(Syh @ Sy + lamda0 * np.eye(Syh.shape[0]), Syh @ Ty)
 
-    Sxh = Sx.conj().permute(1, 0)
+    Sxh = Sx.conj().T
     lamda0 = lamda * np.linalg.norm(Sxh) / Sxh.shape[0]
     Gx = np.linalg.solve(Sxh @ Sx + lamda0 * np.eye(Sxh.shape[0]), Sxh @ Tx)
 
-    return Gz.clone(), Gy.clone(), Gx.clone()
+    return Gz, Gy, Gx
 
 
 def _weight_grid(G, weight):

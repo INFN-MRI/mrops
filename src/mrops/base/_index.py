@@ -6,7 +6,7 @@ from numpy.typing import ArrayLike
 
 from mrinufft._array_compat import with_numpy_cupy
 
-from .._sigpy import get_device
+from .._sigpy import get_device, get_array_module
 
 
 @with_numpy_cupy
@@ -29,8 +29,9 @@ def multi_index(input: ArrayLike, indexes: ArrayLike) -> ArrayLike:
         Selected data with shape ``(*B, *I)``
 
     """
+    xp = get_array_module(input)
     ndims = indexes.shape[-1]
-    tup = (slice(None),) * (input.ndim - ndims) + tuple(indexes.moveaxis(-1, 0))
+    tup = (slice(None),) * (input.ndim - ndims) + tuple(xp.moveaxis(indexes, -1, 0))
     return input[tup]
 
 
@@ -69,7 +70,7 @@ def multi_grid(
     Adjoint of multi_index
 
     """
-    indexes = _ravel(indexes, shape, dim=-1)
+    indexes = _ravel(indexes, shape)
 
     # reshape to (..., -1)
     ndim = len(indexes.shape)
@@ -78,13 +79,16 @@ def multi_grid(
 
     # perform filling
     batch_shape = input.shape[:-1]
-    with get_device(input) as device:
+    device = get_device(input)
+    with device:
+        xp = device.xp
         if output is None:
-            output = device.xp.zeros((*batch_shape, *shape), dtype=input.dtype)
+            output = xp.zeros((*batch_shape, *shape), dtype=input.dtype)
         else:
             output[:] = 0.0
         output = output.reshape((*batch_shape, -1))
-        output = output.index_add_(-1, indexes, input)
+        leading_indices = xp.indices(output.shape[:-1])  # Generates (2, 3) grid
+        xp.add.at(output, (*leading_indices, indexes), input)
         output = output.reshape(*batch_shape, *shape)
 
     return output
@@ -93,7 +97,9 @@ def multi_grid(
 # %% subroutines
 def _ravel(indexes, shape):
     ndim = indexes.shape[-1]
-    with get_device(indexes) as device:
-        unfolding = [1] + shape[: ndim - 1]
+    device = get_device(indexes)
+    xp = device.xp
+    with device:
+        unfolding = xp.cumprod([1] + shape[: ndim - 1])
         flattened_indexes = device.xp.asarray(unfolding, dtype=indexes.dtype) * indexes
         return flattened_indexes.sum(axis=-1)
