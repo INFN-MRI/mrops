@@ -6,7 +6,7 @@ from numpy.typing import ArrayLike
 
 import numpy as np
 from scipy.linalg import expm, logm
-
+from scipy.linalg import fractional_matrix_power as fmp
 
 from mrinufft._array_compat import with_numpy
 
@@ -70,16 +70,16 @@ def train(
 
     # build interpolator
     deltas = (np.arange(nsteps) - (nsteps - 1) // 2) / (nsteps - 1)
-    Gx = _weight_grid(kern["Gx"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
-    Gy = _weight_grid(kern["Gy"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
+    Dx = _grog_power(kern["Gx"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
+    Dy = _grog_power(kern["Gy"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
     if ndim == 3:
-        Gz = _weight_grid(kern["Gz"], deltas).astype(
+        Dz = _grog_power(kern["Gz"], deltas).astype(
             np.complex64
         )  # (nsteps, nc, nc), 3D only
     else:
-        Gz = None
+        Dz = None
 
-    return {"x": Gx, "y": Gy, "z": Gz}
+    return {"x": Dx, "y": Dy, "z": Dz}
 
 
 # %% subroutines
@@ -141,22 +141,17 @@ def _grappa_op_2d(calib, lamda):
     _cx, _cy, nc = calib.shape[:]
 
     # we need sources (last source has no target!)
-    Sx = np.reshape(calib[:-1, ...], (-1, nc))
     Sy = np.reshape(calib[:, :-1, :], (-1, nc))
+    Sx = np.reshape(calib[:-1, ...], (-1, nc))
 
     # and we need targets for an operator along each axis (first
     # target has no associated source!)
-    Tx = np.reshape(calib[1:, ...], (-1, nc))
     Ty = np.reshape(calib[:, 1:, :], (-1, nc))
+    Tx = np.reshape(calib[1:, ...], (-1, nc))
 
     # train the operators:
-    Sxh = Sx.conj().T
-    lamda0 = lamda * np.linalg.norm(Sxh) / Sxh.shape[0]
-    Gx = np.linalg.solve(Sxh @ Sx + lamda0 * np.eye(Sxh.shape[0]), Sxh @ Tx)
-
-    Syh = Sy.conj().T
-    lamda0 = lamda * np.linalg.norm(Syh) / Syh.shape[0]
-    Gy = np.linalg.solve(Syh @ Sy + lamda0 * np.eye(Syh.shape[0]), Syh @ Ty)
+    Gy = tikhonov_lstsq(Sy, Ty, lamda)
+    Gx = tikhonov_lstsq(Sx, Tx, lamda)
 
     return Gy, Gx
 
@@ -178,27 +173,32 @@ def _grappa_op_3d(calib, lamda):
     Tx = np.reshape(calib[:, :, 1:, :], (-1, nc))
 
     # train the operators:
-    Szh = Sz.conj().T
-    lamda0 = lamda * np.linalg.norm(Szh) / Szh.shape[0]
-    Gz = np.linalg.solve(Szh @ Sz + lamda0 * np.eye(Szh.shape[0]), Szh @ Tz)
-
-    Syh = Sy.conj().T
-    lamda0 = lamda * np.linalg.norm(Syh) / Syh.shape[0]
-    Gy = np.linalg.solve(Syh @ Sy + lamda0 * np.eye(Syh.shape[0]), Syh @ Ty)
-
-    Sxh = Sx.conj().T
-    lamda0 = lamda * np.linalg.norm(Sxh) / Sxh.shape[0]
-    Gx = np.linalg.solve(Sxh @ Sx + lamda0 * np.eye(Sxh.shape[0]), Sxh @ Tx)
+    Gz = tikhonov_lstsq(Sz, Tz, lamda)
+    Gy = tikhonov_lstsq(Sy, Ty, lamda)
+    Gx = tikhonov_lstsq(Sx, Tx, lamda)
 
     return Gz, Gy, Gx
 
 
-def _weight_grid(G, weight):
-    V, E = np.linalg.eig(G)
+def _grog_power(G, exponents):
+    D, idx = [], 0
+    for exp in exponents:
+        if np.isclose(exp, 0.0):
+            _D = np.eye(G.shape[0], dtype=G.dtype)
+        else:
+            _D = fmp(G, np.abs(exp)).astype(G.dtype)
+            if np.sign(exp) < 0:
+                _D = np.linalg.pinv(_D).astype(G.dtype)
+        D.append(_D)
+        idx += 1
 
-    # raise to power along expanded first dim
-    V = V ** weight[:, None]
-    V = np.apply_along_axis(np.diag, 1, V)
+    return np.stack(D, axis=0)
 
-    # put together and return
-    return E @ V @ np.linalg.inv(E)
+    # V, E = np.linalg.eig(G)
+
+    # # raise to power along expanded first dim
+    # V = V ** weight[:, None]
+    # V = np.apply_along_axis(np.diag, 1, V)
+
+    # # put together and return
+    # return E @ V @ np.linalg.inv(E)
