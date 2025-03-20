@@ -2,12 +2,15 @@
 
 __all__ = ["interp"]
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 import numpy as np
 import numba as nb
 
-from mrinufft._array_compat import with_numpy_cupy, CUPY_AVAILABLE
+import torch
+import torch.nn.functional as F
+
+from mrinufft._array_compat import with_numpy_cupy, with_torch, CUPY_AVAILABLE
 
 from .._sigpy import get_device
 from .._utils import rescale_coords
@@ -16,11 +19,11 @@ from .._utils import rescale_coords
 @with_numpy_cupy
 def interp(
     interpolator: dict,
-    input: ArrayLike,
-    coords: ArrayLike,
-    shape: ArrayLike,
+    input: NDArray[complex],
+    coords: NDArray[float],
+    shape: list[int] | tuple[int],
     threadsperblock: int = 128,
-) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
+) -> tuple[NDArray[complex], NDArray[int], NDArray[float]]:
     """
     GRAPPA Operator Gridding (GROP) interpolation of Non-Cartesian datasets.
 
@@ -28,11 +31,11 @@ def interp(
     ----------
     interpolator: dict
         Trained GROG interpolator.
-    input : ArrayLike
+    input : NDArray[complex]
         Input Non-Cartesian kspace.
-    coords : ArrayLike
+    coords : NDArray[float]
         Fourier domain coordinates array of shape ``(..., ndims)``.
-    shape : ArrayLike[int]
+    shape : list[int] | tuple[int]
         Cartesian grid size of shape ``(ndim,)``.
         If scalar, isotropic matrix is assumed.
     threadsperblock : int, optional
@@ -40,11 +43,11 @@ def interp(
 
     Returns
     -------
-    output : ArrayLike
+    output : NDArray[complex]
         Output sparse Cartesian kspace.
-    indexes : np.ndarray | torch.Tensor
+    indexes : NDArray[int]
         Sampled k-space points indexes.
-    weights : np.ndarray | torch.Tensor
+    weights : NDArray[float]
         Number of occurrences of each k-space sample.
 
     Notes
@@ -86,16 +89,16 @@ def interp(
     nsteps = interpolator["x"].shape[0]
     if ndim == 2:
         Gx, Gy = interpolator["x"], interpolator["y"]
-        Gx = Gx[None, ...]
+        Gx = Gx[None, :, ...]
         Gy = Gy[:, None, ...]
         Gx = np.repeat(Gx, nsteps, axis=0)  # (nsteps, nsteps, nc, nc)
         Gy = np.repeat(Gy, nsteps, axis=1)  # (nsteps, nsteps, nc, nc)
         Gx = Gx.reshape(-1, *Gx.shape[-2:])  # (nsteps**2, nc, nc)
         Gy = Gy.reshape(-1, *Gy.shape[-2:])  # (nsteps**2, nc, nc)
-        G = Gx @ Gy  # (nsteps**2, nc, nc)
+        lut = Gx @ Gy  # (nsteps**2, nc, nc)
     elif ndim == 3:
         Gx, Gy, Gz = interpolator["x"], interpolator["y"], interpolator["z"]
-        Gx = Gx[None, None, ...]
+        Gx = Gx[None, None, :, ...]
         Gy = Gy[None, :, None, ...]
         Gz = Gz[:, None, None, ...]
         Gx = np.repeat(Gx, nsteps, axis=0)  # (nsteps, nsteps, nsteps, nc, nc)
@@ -107,23 +110,27 @@ def interp(
         Gx = Gx.reshape(-1, *Gx.shape[-2:])  # (nsteps**3, nc, nc)
         Gy = Gy.reshape(-1, *Gy.shape[-2:])  # (nsteps**3, nc, nc)
         Gz = Gz.reshape(-1, *Gz.shape[-2:])  # (nsteps**3, nc, nc)
-        G = Gx @ Gy @ Gz  # (nsteps**3, nc, nc)
+        lut = Gx @ Gy @ Gz  # (nsteps**3, nc, nc)
 
     # build indexes
     coords = rescale_coords(coords, shape)
     indexes = xp.round(coords)
 
     with device:
-        lut = indexes - coords
-        lut = xp.floor(10 * lut, dtype=xp.float32) + nsteps // 2
-        lut = lut * xp.asarray([1, nsteps, nsteps**2], dtype=xp.float32)[:ndim]
-        lut = lut.sum(axis=-1).astype(int)
+        precision = 1.0 / (nsteps - 1)
+        lut_idx = (indexes - coords) / precision
+        lut_idx = (precision * xp.round(lut_idx) + 0.5) * (nsteps - 1)
+        lut_idx = (
+            lut_idx.astype(xp.float32)
+            * xp.asarray([1, nsteps, nsteps**2], dtype=xp.float32)[:ndim]
+        )
+        lut_idx = lut_idx.sum(axis=-1).astype(int)
 
         # perform interpolation
         if device.id < 0:
-            output = do_interpolation(input, G, lut)
+            output = do_interpolation(input, lut, lut_idx)
         else:
-            output = do_interpolation_cuda(input, G, lut, threadsperblock)
+            output = do_interpolation_cuda(input, lut, lut_idx, threadsperblock)
 
         # finalize indexes
         if xp.isscalar(shape):
@@ -158,13 +165,13 @@ def interp(
         outside = indexes[..., n] < 0
         output[..., outside] = 0.0
         indexes[..., n][outside] = 0  # collapse to minimum
-        # weights[outside] = 0.0
+        weights[outside] = 0.0
 
         # above maximum
         outside = indexes[..., n] >= shape[n]
         output[..., outside] = 0.0
         indexes[..., n][outside] = shape[n] - 1  # collapse to maxmum
-        # weights[outside] = 0.0
+        weights[outside] = 0.0
 
     # enforce contiguity
     output = xp.ascontiguousarray(output)
@@ -175,41 +182,83 @@ def interp(
 
 
 # %% subroutines
-def do_interpolation(noncart, G, lut):
+def pre_interpolate(input, coords, shape, osf=4.0):
+    device = get_device(input)
+    xp = device.xp
+
+    # find targets
+    ndim = coords.shape[-1]
+    coords = rescale_coords(coords, shape)
+    target_coords = xp.round(coords)
+
+    # upsample
+    upsampled_input = _upsample(input, osf)
+    upsampled_coords = xp.stack(
+        [_upsample(coords[..., n], osf) for n in range(ndim)], axis=-1
+    )
+
+
+@with_torch
+def _upsample(input, osf):
+    tmp = input.reshape(-1, input.shape[-1])
+    if torch.is_complex(input):
+        re_upsampled_input = F.interpolate(
+            tmp[None, None, ...].real,
+            scale_factor=(1.0, osf),
+            mode="bicubic",
+            align_corners=True,
+        )
+        im_upsampled_input = F.interpolate(
+            tmp[None, None, ...].imag,
+            scale_factor=(1.0, osf),
+            mode="bicubic",
+            align_corners=True,
+        )
+        upsampled_input = (re_upsampled_input + 1j * im_upsampled_input)[0, 0]
+    else:
+        upsampled_input = F.interpolate(
+            tmp[None, None, ...],
+            scale_factor=(1.0, osf),
+            mode="bicubic",
+            align_corners=True,
+        )
+        upsampled_input = upsampled_input[0, 0]
+    return upsampled_input.reshape(*input.shape[:-1], -1)
+
+
+def do_interpolation(noncart, lut, lut_idx):
     cart = np.zeros(noncart.shape, dtype=noncart.dtype)
-    _interp(cart, noncart, G, lut)
+    _interp(cart, noncart, lut, lut_idx)
     return cart
 
 
 @nb.njit(fastmath=True, cache=True)  # pragma: no cover
 def _dot_product(out, in_a, in_b):
     row, col = in_b.shape
-
     for i in range(row):
         for j in range(col):
-            out[j] += in_b[i][j] * in_a[j]
+            out[i] += in_b[i][j] * in_a[j]
 
     return out
 
 
 @nb.njit(fastmath=True, parallel=True)  # pragma: no cover
-def _interp(data_out, data_in, interp, lut):
-    # get data dimension
+def _interp(data_out, data_in, lut, lut_idx):
     nsamples, batch_size, _ = data_in.shape
 
     for i in nb.prange(nsamples * batch_size):
         sample = i // batch_size
         batch = i % batch_size
-        idx = lut[sample]
+        idx = lut_idx[sample]
 
-        _dot_product(data_out[sample][batch], data_in[sample][batch], interp[idx])
+        _dot_product(data_out[sample][batch], data_in[sample][batch], lut[idx])
 
 
 # %% CUDA
 if CUPY_AVAILABLE:
     from numba import cuda
 
-    def do_interpolation_cuda(noncart, G, lut, threadsperblock):
+    def do_interpolation_cuda(noncart, lut, lut_idx, threadsperblock):
         blockspergrid = (
             np.prod(noncart.shape[-2:]) + (threadsperblock - 1)
         ) // threadsperblock
@@ -217,22 +266,21 @@ if CUPY_AVAILABLE:
 
         with get_device(noncart) as device:
             cart = device.xp.zeros(noncart.shape, dtype=noncart.dtype)
-            _interp_cuda[blockspergrid, threadsperblock](cart, noncart, G, lut)
+            _interp_cuda[blockspergrid, threadsperblock](cart, noncart, lut, lut_idx)
 
         return cart
 
     @cuda.jit(device=True, inline=True)  # pragma: no cover
     def _dot_product_cuda(out, in_a, in_b):
         row, col = in_b.shape
-
         for i in range(row):
             for j in range(col):
-                out[j] += in_b[i][j] * in_a[j]
+                out[i] += in_b[i][j] * in_a[j]
 
         return out
 
     @cuda.jit(fastmath=True)  # pragma: no cover
-    def _interp_cuda(data_out, data_in, interp, lut):
+    def _interp_cuda(data_out, data_in, lut, lut_idx):
         # get data dimension
         nvoxels, batch_size, _ = data_in.shape
 
@@ -240,8 +288,6 @@ if CUPY_AVAILABLE:
         if i < nvoxels * batch_size:
             sample = i // batch_size
             batch = i % batch_size
-            idx = lut[sample]
+            idx = lut_idx[sample]
 
-            _dot_product_cuda(
-                data_out[sample][batch], data_in[sample][batch], interp[idx]
-            )
+            _dot_product_cuda(data_out[sample][batch], data_in[sample][batch], lut[idx])
