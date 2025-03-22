@@ -97,7 +97,7 @@ def interp(
     Dy = _grog_power(interpolator["y"], deltas).astype(input.dtype)  # (nsteps, nc, nc)
     if "z" in interpolator and interpolator["z"] is not None:
         Dz = _grog_power(interpolator["z"], deltas).astype(
-            input.dtyp
+            input.dtype
         )  # (nsteps, nc, nc), 3D only
     else:
         Dz = None
@@ -200,6 +200,7 @@ def interp(
 
 
 # %% subroutines
+@with_numpy
 def _grog_power(G, exponents):
     D, idx = [], 0
     for exp in exponents:
@@ -345,7 +346,6 @@ def do_interpolation(
         output = xp.zeros((cart_indices.shape[0], nbatches, ncoils), dtype=input.dtype)
         if device.id < 0:
             if ndim == 2:
-                G = np.zeros((ncoils, ncoils), dtype=input.dtype)
                 _interpolation_2D(
                     output,
                     input,
@@ -360,11 +360,8 @@ def do_interpolation(
                     precision,
                     stepsize,
                     radius,
-                    G,
                 )
             elif ndim == 3:
-                G = np.zeros((ncoils, ncoils), dtype=input.dtype)
-                _G = np.zeros((ncoils, ncoils), dtype=input.dtype)
                 _interpolation_3D(
                     output,
                     input,
@@ -380,14 +377,11 @@ def do_interpolation(
                     precision,
                     stepsize,
                     radius,
-                    G,
-                    _G,
                 )
         else:
             blockspergrid = (output.shape[0] + (threadsperblock - 1)) // threadsperblock
             blockspergrid = int(blockspergrid)
             if ndim == 2:
-                G = xp.zeros((ncoils, ncoils), dtype=input.dtype)
                 _cu_interpolation_2D[blockspergrid, threadsperblock](
                     output,
                     input,
@@ -402,11 +396,8 @@ def do_interpolation(
                     precision,
                     stepsize,
                     radius,
-                    G,
                 )
             elif ndim == 3:
-                G = xp.zeros((ncoils, ncoils), dtype=input.dtype)
-                _G = xp.zeros((ncoils, ncoils), dtype=input.dtype)
                 _cu_interpolation_3D[blockspergrid, threadsperblock](
                     output,
                     input,
@@ -422,8 +413,6 @@ def do_interpolation(
                     precision,
                     stepsize,
                     radius,
-                    G,
-                    _G,
                 )
 
     return output
@@ -463,19 +452,21 @@ def _interpolation_2D(
     precision,
     stepsize,
     radius,
-    G,
 ):
     nsamples, nbatches, ncoils = output.shape
     pfac = 10.0**precision
 
-    for n in range(nsamples):
+    for n in nb.prange(nsamples):
         target_index = cart_indices[n]
         target_coord = grid[target_index]
         bin_start = bin_starts[n]
         bin_count = bin_counts[n]
 
+        # allocate G as a thread-local array of zeros
+        G = np.zeros((ncoils, ncoils), dtype=np.complex64)
+
         for b in range(bin_count):
-            G[:] = 0.0  # reset interpolator
+            G.fill(0.0)  # reset interpolator
             idx = bin_start + b
             source_index = noncart_indices[idx]
             source_coord = coords[source_index]
@@ -515,8 +506,6 @@ def _interpolation_3D(
     precision,
     stepsize,
     radius,
-    G,
-    _G,
 ):
     nsamples, nbatches, ncoils = output.shape
     pfac = 10.0**precision
@@ -527,9 +516,13 @@ def _interpolation_3D(
         bin_start = bin_starts[n]
         bin_count = bin_counts[n]
 
+        # allocate G as a thread-local array of zeros
+        G = np.zeros((ncoils, ncoils), dtype=np.complex64)
+        _G = np.zeros((ncoils, ncoils), dtype=np.complex64)
+
         for b in range(bin_count):
-            G[:] = 0.0  # reset interpolator
-            _G[:] = 0.0  # reset interpolator
+            G.fill(0.0)  # reset interpolator
+            _G.fill(0.0)  # reset interpolator
             idx = bin_start + b
             source_index = noncart_indices[idx]
             source_coord = coords[source_index]
@@ -592,7 +585,6 @@ if CUPY_AVAILABLE:
         precision,
         stepsize,
         radius,
-        G,
     ):
         nsamples, nbatches, ncoils = output.shape
         pfac = 10.0**precision
@@ -604,8 +596,11 @@ if CUPY_AVAILABLE:
             bin_start = bin_starts[n]
             bin_count = bin_counts[n]
 
+            # allocate G as a thread-local array of zeros
+            G = cuda.local.array((ncoils, ncoils), dtype=np.complex64)
+
             for b in range(bin_count):
-                G[:] = 0.0  # reset interpolator
+                G.fill(0.0)  # reset interpolator
                 idx = bin_start + b
                 source_index = noncart_indices[idx]
                 source_coord = coords[source_index]
@@ -646,8 +641,6 @@ if CUPY_AVAILABLE:
         precision,
         stepsize,
         radius,
-        G,
-        _G,
     ):
         nsamples, nbatches, ncoils = output.shape
         pfac = 10.0**precision
@@ -659,9 +652,13 @@ if CUPY_AVAILABLE:
             bin_start = bin_starts[n]
             bin_count = bin_counts[n]
 
+            # allocate G as a thread-local array of zeros
+            G = cuda.local.array((ncoils, ncoils), dtype=np.complex64)
+            _G = cuda.local.array((ncoils, ncoils), dtype=np.complex64)
+
             for b in range(bin_count):
-                G[:] = 0.0  # reset interpolator
-                _G[:] = 0.0  # reset interpolator
+                G.fill(0.0)  # reset interpolator
+                _G.fill(0.0)  # reset interpolator
                 idx = bin_start + b
                 source_index = noncart_indices[idx]
                 source_coord = coords[source_index]
