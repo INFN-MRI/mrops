@@ -35,7 +35,7 @@ def interp(
     radius: float = 0.75,
     precision: int = 1,
     threadsperblock: int = 128,
-) -> tuple[NDArray[complex], NDArray[int], NDArray[float]]:
+) -> tuple[NDArray[complex], NDArray[int], tuple[int]]:
     """
     GRAPPA Operator Gridding (GROP) interpolation of Non-Cartesian datasets.
 
@@ -56,11 +56,12 @@ def interp(
     Returns
     -------
     output : NDArray[complex]
-        Output sparse Cartesian kspace.
+        Output sparse Cartesian kspace of shape ``(N,)``.
     indexes : NDArray[int]
-        Sampled k-space points indexes.
-    weights : NDArray[float]
-        Number of occurrences of each k-space sample.
+        Sampled k-space points indexes of shape ``(N, 2)``,
+        with rightmost axis being ``(stack_idx, grid_idx)``.
+    shape : tuple[int]
+        Oversampled k-space grid size.
 
     Notes
     -----
@@ -85,15 +86,15 @@ def interp(
     pfac = 10.0**precision
     radius = np.ceil(pfac * radius) / pfac
     radius = radius.item()
-    nsteps = 1.0 / 10 ** (-precision) + 1
+    nsteps = 2 * radius / 10 ** (-precision) + 1
     nsteps = int(nsteps)
 
     # compute exponends
-    deltas = (np.arange(nsteps) - (nsteps - 1) // 2) / (nsteps - 1)
+    deltas = 2 * radius * (np.linspace(0, 1, nsteps) - 0.5)
 
     # pre-compute partial operators
     Dx = _grog_power(interpolator["x"], deltas).astype(input.dtype)  # (nsteps, nc, nc)
-    Dy = _grog_power(interpolator["y"], deltas).astype(input.dtyp)  # (nsteps, nc, nc)
+    Dy = _grog_power(interpolator["y"], deltas).astype(input.dtype)  # (nsteps, nc, nc)
     if "z" in interpolator and interpolator["z"] is not None:
         Dz = _grog_power(interpolator["z"], deltas).astype(
             input.dtyp
@@ -113,25 +114,29 @@ def interp(
         batch_shape = input.shape[: -len(signal_shape) - len(stack_shape)]
 
         # get number of batches, number of stack and number of coils (assume it is the rightmost batch)
-        n_batchs = int(np.prod(batch_shape[:-1]))
+        n_batches = int(np.prod(batch_shape[:-1]))
         n_stacks = int(np.prod(stack_shape))
         n_samples = int(np.prod(signal_shape))
         n_coils = batch_shape[-1]
 
-        # reshape data to (nsamples, nbatchs, ncoils)
-        input = input.reshape(n_batchs, n_coils, -1)
+        # reshape data to (nsamples, nbatches, ncoils)
+        input = input.reshape(n_batches, n_coils, -1)
         input = input.transpose(2, 0, 1)
         input = xp.ascontiguousarray(input)
 
         # generate stack coordinate
-        stack_coords = xp.meshgrid(
-            *[xp.arange(0, stack_size) for stack_size in stack_shape],
-            indexing="ij",
-        )
-        stack_coords = xp.stack([ax.ravel() for ax in stack_coords], axis=-1)
-        stack_coords = stack_coords * xp.asarray(stack_shape[1:] + (1,))
-        stack_coords = stack_coords.sum(axis=-1)
-        stack_coords = xp.repeat(stack_coords, n_samples)
+        if len(stack_shape) > 0:
+            stack_coords = xp.meshgrid(
+                *[xp.arange(0, stack_size) for stack_size in stack_shape],
+                indexing="ij",
+            )
+            stack_coords = xp.stack([ax.ravel() for ax in stack_coords], axis=-1)
+            stack_coords = stack_coords * xp.asarray(stack_shape[1:] + (1,))
+            stack_coords = stack_coords.sum(axis=-1)
+            stack_coords = xp.repeat(stack_coords, n_samples)
+            stack_coords = stack_coords.astype(int)
+        else:
+            stack_coords = xp.zeros(n_samples, dtype=int)
 
         # reshape coordinates
         coords = coords.reshape(-1, ndim)
@@ -154,10 +159,9 @@ def interp(
         # grid = xp.ascontiguousarray(grid[inside, :])
 
         # find source for each target
-        indices = kdtree(grid, coords, radius)
-
-        # divide amongst stacks
-        noncart_indices, cart_indices = sort_target(n_stacks, indices, stack_coords)
+        noncart_indices, indexes, bin_starts, bin_counts = kdtree(
+            n_stacks, grid, coords, stack_coords, radius
+        )
 
         # power
         Dx = xp.asarray(Dx)
@@ -168,11 +172,14 @@ def interp(
         # perform interpolation
         oshape = xp.ceil(oversamp * xp.asarray(shape)).astype(int)
         oshape = tuple([ax.item() for ax in oshape])
-        data, indexes = do_interpolation(
+        cart_indices = xp.ascontiguousarray(indexes[:, -1])
+        data = do_interpolation(
             input,
             coords,
             grid,
             cart_indices,
+            bin_starts,
+            bin_counts,
             noncart_indices,
             Dx,
             Dy,
@@ -181,6 +188,13 @@ def interp(
             radius,
             threadsperblock,
         )
+
+    # reshape
+    data = data.transpose(1, 2, 0)
+    if n_batches == 1:
+        data = data[0]
+    else:
+        data = data.reshape(*batch_shape, *data.shape[2:])
 
     return data, indexes, oshape
 
@@ -215,12 +229,36 @@ def check_stack(stack_axes):
         return _stack_axes.tolist()
 
 
-def kdtree(grid, coords, radius):
+def kdtree(n_stacks, grid, coords, stack_coords, radius):
     device = get_device(grid)
+    xp = device.xp
+
     if device.id < 0 or CUPY_POST_140 is False:
-        return _kdtree_cpu(grid, coords, radius).tolist()
+        unsorted_indices = _kdtree_cpu(grid, coords, radius)
     else:
-        return _kdtree_cuda(grid, coords, radius).tolist()
+        unsorted_indices = _kdtree_cuda(grid, coords, radius)
+
+    # flatten unsorted indices
+    unsorted_indices_val, unsorted_indices_idx = flatten_indices(
+        n_stacks, unsorted_indices, stack_coords
+    )
+
+    # Get the unique bins and the inverse mapping:
+    unique_bins, inverse = xp.unique(unsorted_indices_idx, axis=0, return_inverse=True)
+
+    # Use the inverse mapping to get a sort order that groups identical bins together:
+    sort_order = xp.argsort(inverse)
+
+    # Apply the sort order to both arrays:
+    bin_idx = unsorted_indices_idx[sort_order]
+    bin_val = unsorted_indices_val[sort_order]
+
+    # (Optional) Now, using xp.unique on the sorted bin_idx, get the start indices and counts:
+    unique_bins, bin_starts, bin_counts = xp.unique(
+        bin_idx, axis=0, return_index=True, return_counts=True
+    )
+
+    return bin_val, unique_bins, bin_starts, bin_counts
 
 
 @with_numpy
@@ -234,14 +272,14 @@ def _kdtree_cuda(grid, coords, radius):
     return kdtree.query_ball_point(grid, r=radius)
 
 
-def sort_target(n_stacks, indices, stack_coords):
+def flatten_indices(n_stacks, indices, stack_coords):
     if CUPY_POST_140:
-        return _sort_target(n_stacks, indices, stack_coords)
+        return _flatten_indices(n_stacks, indices, stack_coords)
     else:
-        return _sort_target_cpu(n_stacks, indices, stack_coords)
+        return _flatten_indices_cpu(n_stacks, indices, stack_coords)
 
 
-def _sort_target(n_stacks, indices, stack_coords):
+def _flatten_indices(n_stacks, indices, stack_coords):
     device = get_device(indices)
     xp = device.xp
     with device:
@@ -252,16 +290,18 @@ def _sort_target(n_stacks, indices, stack_coords):
         counts = counts[nonzeros]
 
         # build
-        noncart = xp.concatenate(indices[nonzeros])
-        cart = xp.repeat(nonzeros, counts)
-        cart = xp.stack((stack_coords[noncart], cart), axis=-1)
+        flattened_indices_val = xp.concatenate(indices[nonzeros])
+        flattened_indices_idx = xp.repeat(nonzeros, counts)
+        flattened_indices_idx = xp.stack(
+            (stack_coords[flattened_indices_val], flattened_indices_idx), axis=-1
+        )
 
-        return noncart, cart
+        return flattened_indices_val, flattened_indices_idx
 
 
 @with_numpy
-def _sort_target_cpu(n_stacks, indices, stack_coords):
-    return _sort_target(n_stacks, indices, stack_coords)
+def _flatten_indices_cpu(n_stacks, indices, stack_coords):
+    return _flatten_indices(n_stacks, indices, stack_coords)
 
 
 def do_interpolation(
@@ -269,6 +309,8 @@ def do_interpolation(
     coords,
     grid,
     cart_indices,
+    bin_starts,
+    bin_counts,
     noncart_indices,
     Dx,
     Dy,
@@ -277,38 +319,58 @@ def do_interpolation(
     radius,
     threadsperblock,
 ):
-    ndim = coords.shape[-1]
     device = get_device(input)
     xp = device.xp
 
-    with device:
-        unique_cart_indices, indices_map = xp.unique(
-            cart_indices, axis=0, return_inverse=True
-        )
-        output = xp.zeros(unique_cart_indices.shape[0], dtype=input.dtype)
-        norm = xp.zeros(unique_cart_indices.shape[0], dtype=input.dtype)
+    # get dimensions
+    ndim = coords.shape[-1]
+    nbatches = input.shape[1]
+    ncoils = input.shape[2]
 
+    # enforce datatype
+    stepsize = 10 ** (-precision)
+    input = input.astype(xp.complex64)
+    coords = coords.astype(xp.float32)
+    grid = grid.astype(xp.float32)
+    cart_indices = cart_indices.astype(int)
+    bin_starts = bin_starts.astype(int)
+    bin_counts = bin_counts.astype(int)
+    noncart_indices = noncart_indices.astype(int)
+    Dx = Dx.astype(xp.complex64)
+    Dy = Dy.astype(xp.complex64)
+    if ndim == 3:
+        Dz = Dz.astype(xp.complex64)
+
+    with device:
+        output = xp.zeros((cart_indices.shape[0], nbatches, ncoils), dtype=input.dtype)
         if device.id < 0:
             if ndim == 2:
+                G = np.zeros((ncoils, ncoils), dtype=input.dtype)
                 _interpolation_2D(
                     output,
-                    norm,
-                    indices_map,
+                    input,
                     cart_indices,
+                    bin_starts,
+                    bin_counts,
                     noncart_indices,
                     coords,
                     grid,
                     Dx,
                     Dy,
                     precision,
+                    stepsize,
                     radius,
+                    G,
                 )
             elif ndim == 3:
+                G = np.zeros((ncoils, ncoils), dtype=input.dtype)
+                _G = np.zeros((ncoils, ncoils), dtype=input.dtype)
                 _interpolation_3D(
                     output,
-                    norm,
-                    indices_map,
+                    input,
                     cart_indices,
+                    bin_starts,
+                    bin_counts,
                     noncart_indices,
                     coords,
                     grid,
@@ -316,42 +378,55 @@ def do_interpolation(
                     Dy,
                     Dz,
                     precision,
+                    stepsize,
                     radius,
+                    G,
+                    _G,
                 )
-        # else:
-        #     blockspergrid = (output.shape[0] + (threadsperblock - 1)) // threadsperblock
-        #     blockspergrid = int(blockspergrid)
-        #     if ndim == 2:
-        #         _cu_interpolation_2D[blockspergrid, threadsperblock](
-        #             output,
-        #             norm,
-        #             indices_map,
-        #             cart_indices,
-        #             noncart_indices,
-        #             coords,
-        #             grid,
-        #             Dx,
-        #             Dy,
-        #             precision,
-        #             radius,
-        #         )
-        #     elif ndim == 3:
-        #         [blockspergrid, threadsperblock](
-        #             output,
-        #             norm,
-        #             indices_map,
-        #             cart_indices,
-        #             noncart_indices,
-        #             coords,
-        #             grid,
-        #             Dx,
-        #             Dy,
-        #             Dz,
-        #             precision,
-        #             radius,
-        #         )
+        else:
+            blockspergrid = (output.shape[0] + (threadsperblock - 1)) // threadsperblock
+            blockspergrid = int(blockspergrid)
+            if ndim == 2:
+                G = xp.zeros((ncoils, ncoils), dtype=input.dtype)
+                _cu_interpolation_2D[blockspergrid, threadsperblock](
+                    output,
+                    input,
+                    cart_indices,
+                    bin_starts,
+                    bin_counts,
+                    noncart_indices,
+                    coords,
+                    grid,
+                    Dx,
+                    Dy,
+                    precision,
+                    stepsize,
+                    radius,
+                    G,
+                )
+            elif ndim == 3:
+                G = xp.zeros((ncoils, ncoils), dtype=input.dtype)
+                _G = xp.zeros((ncoils, ncoils), dtype=input.dtype)
+                _cu_interpolation_3D[blockspergrid, threadsperblock](
+                    output,
+                    input,
+                    cart_indices,
+                    bin_starts,
+                    bin_counts,
+                    noncart_indices,
+                    coords,
+                    grid,
+                    Dx,
+                    Dy,
+                    Dz,
+                    precision,
+                    stepsize,
+                    radius,
+                    G,
+                    _G,
+                )
 
-    return output / norm
+    return output
 
 
 @nb.njit(fastmath=True, cache=True, inline="always")  # pragma: no cover
@@ -372,66 +447,72 @@ def _matvec(A, x, y):
         for j in range(nj):
             y[i] += A[i][j] * x[j]
 
-    return y
 
-
-@nb.njit(fastmath=True)  # pragma: no cover
+@nb.njit(fastmath=True, cache=True, parallel=True)  # pragma: no cover
 def _interpolation_2D(
     output,
-    norm,
-    indices_map,
-    cart_indices,
     input,
+    cart_indices,
+    bin_starts,
+    bin_counts,
     noncart_indices,
     coords,
     grid,
     Dx,
     Dy,
     precision,
+    stepsize,
     radius,
+    G,
 ):
-    nsamples = indices_map.shape[0]
-    _, nbatches, ncoils = input.shape
-
+    nsamples, nbatches, ncoils = output.shape
     pfac = 10.0**precision
-    G = np.zeros((ncoils, ncoils), dtype=input.dtype)
 
     for n in range(nsamples):
-        idx = indices_map[n]
-        stack_idx, grid_idx = cart_indices[idx]
-        coord_idx = noncart_indices[n]
+        target_index = cart_indices[n]
+        target_coord = grid[target_index]
+        bin_start = bin_starts[n]
+        bin_count = bin_counts[n]
+        # weight = 0.0
 
-        # select source and target coordinates
-        source_coord = coords[coord_idx]
-        target_coord = grid[grid_idx]
+        for b in range(bin_count):
+            G[:] = 0.0  # reset interpolator
+            idx = bin_start + b
+            source_index = noncart_indices[idx]
+            source_coord = coords[source_index]
 
-        # compute distance
-        dx = source_coord[0] - target_coord[0]
-        dy = source_coord[1] - target_coord[1]
+            # compute distance
+            dx = source_coord[0] - target_coord[0]
+            dy = source_coord[1] - target_coord[1]
 
-        # find index in interpolator
-        nx = int(round(dx * pfac) / pfac + radius)
-        ny = int(round(dy * pfac) / pfac + radius)
+            # find index in interpolator
+            nx = int((radius + round(dx * pfac) / pfac) / stepsize)
+            ny = int((radius + round(dy * pfac) / pfac) / stepsize)
 
-        # compute interpolator
-        _matmul(Dx[nx], Dy[ny], 0 * G)
+            # compute interpolator
+            _matmul(Dx[nx], Dy[ny], G)
 
-        # update count
-        weight = 1.0  # or 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
-        norm[idx] += weight
+            # update count
+            # _weight = 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
+            # weight += _weight
 
-        # perform interpolation for each element in batch
-        for batch in range(nbatches):
-            _matvec(G, weight * input[coord_idx, batch], output[idx, batch])
+            # perform interpolation for each element in batch
+            for batch in range(nbatches):
+                # _matvec(G, _weight * input[source_index, batch], output[n, batch])
+                _matvec(G, input[source_index, batch], output[n, batch])
+
+        # normalize
+        output[n] = output[n] / bin_count
+        # output[n] = output[n] / weight
 
 
-@nb.njit(fastmath=True)  # pragma: no cover
+@nb.njit(fastmath=True, cache=True, parallel=True)  # pragma: no cover
 def _interpolation_3D(
     output,
-    norm,
-    indices_map,
-    cart_indices,
     input,
+    cart_indices,
+    bin_starts,
+    bin_counts,
     noncart_indices,
     coords,
     grid,
@@ -439,45 +520,54 @@ def _interpolation_3D(
     Dy,
     Dz,
     precision,
+    stepsize,
     radius,
+    G,
+    _G,
 ):
-    nsamples = indices_map.shape[0]
-    _, nbatches, ncoils = input.shape
-
+    nsamples, nbatches, ncoils = output.shape
     pfac = 10.0**precision
-    _G = np.zeros((ncoils, ncoils), dtype=input.dtype)
-    G = np.zeros((ncoils, ncoils), dtype=input.dtype)
 
-    for n in range(nsamples):
-        idx = indices_map[n]
-        stack_idx, grid_idx = cart_indices[idx]
-        coord_idx = noncart_indices[n]
+    for n in nb.prange(nsamples):
+        target_index = cart_indices[n]
+        target_coord = grid[target_index]
+        bin_start = bin_starts[n]
+        bin_count = bin_counts[n]
+        # weight = 0.0
 
-        # select source and target coordinates
-        source_coord = coords[coord_idx]
-        target_coord = grid[grid_idx]
+        for b in range(bin_count):
+            G[:] = 0.0  # reset interpolator
+            _G[:] = 0.0  # reset interpolator
+            idx = bin_start + b
+            source_index = noncart_indices[idx]
+            source_coord = coords[source_index]
 
-        # compute distance
-        dx = source_coord[0] - target_coord[0]
-        dy = source_coord[1] - target_coord[1]
-        dz = source_coord[2] - target_coord[2]
+            # compute distance
+            dx = source_coord[0] - target_coord[0]
+            dy = source_coord[1] - target_coord[1]
+            dz = source_coord[2] - target_coord[2]
 
-        # find index in interpolator
-        nx = int(round(dx * pfac) / pfac + radius)
-        ny = int(round(dy * pfac) / pfac + radius)
-        nz = int(round(dz * pfac) / pfac + radius)
+            # find index in interpolator
+            nx = int((radius + round(dx * pfac) / pfac) / stepsize)
+            ny = int((radius + round(dy * pfac) / pfac) / stepsize)
+            nz = int((radius + round(dz * pfac) / pfac) / stepsize)
 
-        # compute interpolator
-        _matmul(Dx[nx], Dy[ny], 0 * _G)
-        _matmul(_G, Dz[nz], 0 * G)
+            # compute interpolator
+            _matmul(Dx[nx], Dy[ny], _G)
+            _matmul(_G, Dz[nz], G)
 
-        # update count
-        weight = 1.0  # or 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
-        norm[idx] += weight
+            # update count
+            # _weight = 1.0 / (1.0 + (dx**2 + dy**2 + dz**0.5)**0.5)
+            # weight += _weight
 
-        # perform interpolation for each element in batch
-        for batch in range(nbatches):
-            _matvec(G, weight * input[coord_idx, batch], output[idx, batch])
+            # perform interpolation for each element in batch
+            for batch in range(nbatches):
+                # _matvec(G, _weight * input[source_index, batch], output[n, batch])
+                _matvec(G, input[source_index, batch], output[n, batch])
+
+        # normalize
+        output[n] = output[n] / bin_count
+        # output[n] = output[n] / weight
 
 
 # %% CUDA
@@ -501,64 +591,73 @@ if CUPY_AVAILABLE:
             for j in range(nj):
                 y[i] += A[i][j] * x[j]
 
-        return y
-
-    @cuda.jit(fastmath=True)  # pragma: no cover
-    def _interpolation_2D(
+    @cuda.jit(fastmath=True, cache=True)  # pragma: no cover
+    def _cu_interpolation_2D(
         output,
-        norm,
-        indices_map,
-        cart_indices,
         input,
+        cart_indices,
+        bin_starts,
+        bin_counts,
         noncart_indices,
         coords,
         grid,
         Dx,
         Dy,
         precision,
+        stepsize,
         radius,
+        G,
     ):
-        nsamples = indices_map.shape[0]
-        _, nbatches, ncoils = input.shape
-
+        nsamples, nbatches, ncoils = output.shape
         pfac = 10.0**precision
-        G = np.zeros((ncoils, ncoils), dtype=input.dtype)
 
-        for n in range(nsamples):
-            idx = indices_map[n]
-            stack_idx, grid_idx = cart_indices[idx]
-            coord_idx = noncart_indices[n]
+        n = cuda.grid(1)
+        if n < nsamples:
+            target_index = cart_indices[n]
+            target_coord = grid[target_index]
+            bin_start = bin_starts[n]
+            bin_count = bin_counts[n]
+            # weight = 0.0
 
-            # select source and target coordinates
-            source_coord = coords[coord_idx]
-            target_coord = grid[grid_idx]
+            for b in range(bin_count):
+                G[:] = 0.0  # reset interpolator
+                idx = bin_start + b
+                source_index = noncart_indices[idx]
+                source_coord = coords[source_index]
 
-            # compute distance
-            dx = source_coord[0] - target_coord[0]
-            dy = source_coord[1] - target_coord[1]
+                # compute distance
+                dx = source_coord[0] - target_coord[0]
+                dy = source_coord[1] - target_coord[1]
 
-            # find index in interpolator
-            nx = int(round(dx * pfac) / pfac + radius)
-            ny = int(round(dy * pfac) / pfac + radius)
+                # find index in interpolator
+                nx = int((radius + round(dx * pfac) / pfac) / stepsize)
+                ny = int((radius + round(dy * pfac) / pfac) / stepsize)
 
-            # compute interpolator
-            _matmul(Dx[nx], Dy[ny], 0 * G)
+                # compute interpolator
+                _cumatmul(Dx[nx], Dy[ny], 0.0 * G)
 
-            # update count
-            weight = 1.0  # or 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
-            norm[idx] += weight
+                # update count
+                # _weight = 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
+                # weight += _weight
 
-            # perform interpolation for each element in batch
-            for batch in range(nbatches):
-                _matvec(G, weight * input[coord_idx, batch], output[idx, batch])
+                # perform interpolation for each element in batch
+                for batch in range(nbatches):
+                    # _cumatvec(G, _weight * input[source_index, batch], output[target_index, batch])
+                    _cumatvec(
+                        G, input[source_index, batch], output[target_index, batch]
+                    )
 
-    @nb.njit(fastmath=True)  # pragma: no cover
-    def _interpolation_3D(
+            # normalize
+            output[target_index] = output[target_index] / bin_count
+            # output[target_index] = output[target_index] / weight
+
+    @cuda.jit(fastmath=True, cache=True)  # pragma: no cover
+    def _cu_interpolation_3D(
         output,
-        norm,
-        indices_map,
-        cart_indices,
         input,
+        cart_indices,
+        bin_starts,
+        bin_counts,
         noncart_indices,
         coords,
         grid,
@@ -566,42 +665,52 @@ if CUPY_AVAILABLE:
         Dy,
         Dz,
         precision,
+        stepsize,
         radius,
+        G,
+        _G,
     ):
-        nsamples = indices_map.shape[0]
-        _, nbatches, ncoils = input.shape
-
+        nsamples, nbatches, ncoils = output.shape
         pfac = 10.0**precision
-        _G = np.zeros((ncoils, ncoils), dtype=input.dtype)
-        G = np.zeros((ncoils, ncoils), dtype=input.dtype)
 
-        for n in range(nsamples):
-            idx = indices_map[n]
-            stack_idx, grid_idx = cart_indices[idx]
-            coord_idx = noncart_indices[n]
+        n = cuda.grid(1)
+        if n < nsamples:
+            target_index = cart_indices[n]
+            target_coord = grid[target_index]
+            bin_start = bin_starts[n]
+            bin_count = bin_counts[n]
+            # weight = 0.0
 
-            # select source and target coordinates
-            source_coord = coords[coord_idx]
-            target_coord = grid[grid_idx]
+            for b in range(bin_count):
+                G[:] = 0.0  # reset interpolator
+                _G[:] = 0.0  # reset interpolator
+                idx = bin_start + b
+                source_index = noncart_indices[idx]
+                source_coord = coords[source_index]
 
-            # compute distance
-            dx = source_coord[0] - target_coord[0]
-            dy = source_coord[1] - target_coord[1]
-            dz = source_coord[2] - target_coord[2]
+                # compute distance
+                dx = source_coord[0] - target_coord[0]
+                dy = source_coord[1] - target_coord[1]
+                dz = source_coord[2] - target_coord[2]
 
-            # find index in interpolator
-            nx = int(round(dx * pfac) / pfac + radius)
-            ny = int(round(dy * pfac) / pfac + radius)
-            nz = int(round(dz * pfac) / pfac + radius)
+                # find index in interpolator
+                nx = int((radius + round(dx * pfac) / pfac) / stepsize)
+                ny = int((radius + round(dy * pfac) / pfac) / stepsize)
+                nz = int((radius + round(dz * pfac) / pfac) / stepsize)
 
-            # compute interpolator
-            _matmul(Dx[nx], Dy[ny], 0 * _G)
-            _matmul(_G, Dz[nz], 0 * G)
+                # compute interpolator
+                _cumatmul(Dx[nx], Dy[ny], 0.0 * _G)
+                _cumatmul(_G, Dz[nz], 0.0 * G)
 
-            # update count
-            weight = 1.0  # or 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
-            norm[idx] += weight
+                # update count
+                # _weight = 1.0 / (1.0 + (dx**2 + dy**2 + dz**0.5)**0.5)
+                # weight += _weight
 
-            # perform interpolation for each element in batch
-            for batch in range(nbatches):
-                _matvec(G, weight * input[coord_idx, batch], output[idx, batch])
+                # perform interpolation for each element in batch
+                for batch in range(nbatches):
+                    # _cumatvec(G, _weight * input[source_index, batch], output[n, batch])
+                    _cumatvec(G, input[source_index, batch], output[n, batch])
+
+            # normalize
+            output[n] = output[n] / bin_count
+            # output[n] = output[n] / weight

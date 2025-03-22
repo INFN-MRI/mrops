@@ -69,17 +69,23 @@ def train(
     kern = _calc_grappaop(ndim, train_data, lamda, coords)
 
     # build interpolator
-    deltas = (np.arange(nsteps) - (nsteps - 1) // 2) / (nsteps - 1)
-    Dx = _grog_power(kern["Gx"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
-    Dy = _grog_power(kern["Gy"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
+    # deltas = (np.arange(nsteps) - (nsteps - 1) // 2) / (nsteps - 1)
+    # Dx = _grog_power(kern["Gx"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
+    # Dy = _grog_power(kern["Gy"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
+    # if ndim == 3:
+    #     Dz = _grog_power(kern["Gz"], deltas).astype(
+    #         np.complex64
+    #     )  # (nsteps, nc, nc), 3D only
+    # else:
+    #     Dz = None
+    Gx = kern["Gx"]
+    Gy = kern["Gy"]
     if ndim == 3:
-        Dz = _grog_power(kern["Gz"], deltas).astype(
-            np.complex64
-        )  # (nsteps, nc, nc), 3D only
+        Gz = kern["Gz"]
     else:
-        Dz = None
+        Gz = None
 
-    return {"x": Dx, "y": Dy, "z": Dz}
+    return {"x": Gx, "y": Gy, "z": Gz}
 
 
 # %% subroutines
