@@ -473,7 +473,6 @@ def _interpolation_2D(
         target_coord = grid[target_index]
         bin_start = bin_starts[n]
         bin_count = bin_counts[n]
-        # weight = 0.0
 
         for b in range(bin_count):
             G[:] = 0.0  # reset interpolator
@@ -482,8 +481,8 @@ def _interpolation_2D(
             source_coord = coords[source_index]
 
             # compute distance
-            dx = source_coord[0] - target_coord[0]
-            dy = source_coord[1] - target_coord[1]
+            dx = target_coord[0] - source_coord[0]
+            dy = target_coord[1] - source_coord[1]
 
             # find index in interpolator
             nx = int((radius + round(dx * pfac) / pfac) / stepsize)
@@ -492,18 +491,12 @@ def _interpolation_2D(
             # compute interpolator
             _matmul(Dx[nx], Dy[ny], G)
 
-            # update count
-            # _weight = 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
-            # weight += _weight
-
             # perform interpolation for each element in batch
             for batch in range(nbatches):
-                # _matvec(G, _weight * input[source_index, batch], output[n, batch])
                 _matvec(G, input[source_index, batch], output[n, batch])
 
         # normalize
         output[n] = output[n] / bin_count
-        # output[n] = output[n] / weight
 
 
 @nb.njit(fastmath=True, cache=True, parallel=True)  # pragma: no cover
@@ -533,7 +526,6 @@ def _interpolation_3D(
         target_coord = grid[target_index]
         bin_start = bin_starts[n]
         bin_count = bin_counts[n]
-        # weight = 0.0
 
         for b in range(bin_count):
             G[:] = 0.0  # reset interpolator
@@ -543,9 +535,9 @@ def _interpolation_3D(
             source_coord = coords[source_index]
 
             # compute distance
-            dx = source_coord[0] - target_coord[0]
-            dy = source_coord[1] - target_coord[1]
-            dz = source_coord[2] - target_coord[2]
+            dx = target_coord[0] - source_coord[0]
+            dy = target_coord[1] - source_coord[1]
+            dz = target_coord[2] - source_coord[2]
 
             # find index in interpolator
             nx = int((radius + round(dx * pfac) / pfac) / stepsize)
@@ -556,18 +548,12 @@ def _interpolation_3D(
             _matmul(Dx[nx], Dy[ny], _G)
             _matmul(_G, Dz[nz], G)
 
-            # update count
-            # _weight = 1.0 / (1.0 + (dx**2 + dy**2 + dz**0.5)**0.5)
-            # weight += _weight
-
             # perform interpolation for each element in batch
             for batch in range(nbatches):
-                # _matvec(G, _weight * input[source_index, batch], output[n, batch])
                 _matvec(G, input[source_index, batch], output[n, batch])
 
         # normalize
         output[n] = output[n] / bin_count
-        # output[n] = output[n] / weight
 
 
 # %% CUDA
@@ -617,7 +603,6 @@ if CUPY_AVAILABLE:
             target_coord = grid[target_index]
             bin_start = bin_starts[n]
             bin_count = bin_counts[n]
-            # weight = 0.0
 
             for b in range(bin_count):
                 G[:] = 0.0  # reset interpolator
@@ -626,8 +611,8 @@ if CUPY_AVAILABLE:
                 source_coord = coords[source_index]
 
                 # compute distance
-                dx = source_coord[0] - target_coord[0]
-                dy = source_coord[1] - target_coord[1]
+                dx = target_coord[0] - source_coord[0]
+                dy = target_coord[1] - source_coord[1]
 
                 # find index in interpolator
                 nx = int((radius + round(dx * pfac) / pfac) / stepsize)
@@ -636,20 +621,14 @@ if CUPY_AVAILABLE:
                 # compute interpolator
                 _cumatmul(Dx[nx], Dy[ny], 0.0 * G)
 
-                # update count
-                # _weight = 1.0 / (1.0 + (dx**2 + dy**2)**0.5)
-                # weight += _weight
-
                 # perform interpolation for each element in batch
                 for batch in range(nbatches):
-                    # _cumatvec(G, _weight * input[source_index, batch], output[target_index, batch])
                     _cumatvec(
                         G, input[source_index, batch], output[target_index, batch]
                     )
 
             # normalize
             output[target_index] = output[target_index] / bin_count
-            # output[target_index] = output[target_index] / weight
 
     @cuda.jit(fastmath=True, cache=True)  # pragma: no cover
     def _cu_interpolation_3D(
@@ -679,7 +658,6 @@ if CUPY_AVAILABLE:
             target_coord = grid[target_index]
             bin_start = bin_starts[n]
             bin_count = bin_counts[n]
-            # weight = 0.0
 
             for b in range(bin_count):
                 G[:] = 0.0  # reset interpolator
@@ -689,9 +667,9 @@ if CUPY_AVAILABLE:
                 source_coord = coords[source_index]
 
                 # compute distance
-                dx = source_coord[0] - target_coord[0]
-                dy = source_coord[1] - target_coord[1]
-                dz = source_coord[2] - target_coord[2]
+                dx = target_coord[0] - source_coord[0]
+                dy = target_coord[1] - source_coord[1]
+                dz = target_coord[2] - source_coord[2]
 
                 # find index in interpolator
                 nx = int((radius + round(dx * pfac) / pfac) / stepsize)
@@ -702,15 +680,9 @@ if CUPY_AVAILABLE:
                 _cumatmul(Dx[nx], Dy[ny], 0.0 * _G)
                 _cumatmul(_G, Dz[nz], 0.0 * G)
 
-                # update count
-                # _weight = 1.0 / (1.0 + (dx**2 + dy**2 + dz**0.5)**0.5)
-                # weight += _weight
-
                 # perform interpolation for each element in batch
                 for batch in range(nbatches):
-                    # _cumatvec(G, _weight * input[source_index, batch], output[n, batch])
                     _cumatvec(G, input[source_index, batch], output[n, batch])
 
             # normalize
             output[n] = output[n] / bin_count
-            # output[n] = output[n] / weight
