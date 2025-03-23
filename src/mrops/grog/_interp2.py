@@ -230,9 +230,15 @@ def check_stack(stack_axes):
         return _stack_axes.tolist()
 
 
-def kdtree(n_stacks, grid, coords, stack_coords, radius):
+def kdtree(n_stacks, grid, coords, stack_coords, radius, precision):
     device = get_device(grid)
     xp = device.xp
+
+    # rounding variables
+    pfac = 10.0**precision
+    stepsize = 10 ** (-precision)
+    nsteps = 2 * radius / 10 ** (-precision) + 1
+    nsteps = int(nsteps)
 
     if device.id < 0 or CUPY_POST_140 is False:
         unsorted_indices = _kdtree_cpu(grid, coords, radius)
@@ -244,22 +250,69 @@ def kdtree(n_stacks, grid, coords, stack_coords, radius):
         n_stacks, unsorted_indices, stack_coords
     )
 
-    # Get the unique bins and the inverse mapping:
-    unique_bins, inverse = xp.unique(unsorted_indices_idx, axis=0, return_inverse=True)
+    # get the unique bins and the inverse mapping:
+    unique_bins, inverse = _unique(unsorted_indices_idx, return_inverse=True)
 
-    # Use the inverse mapping to get a sort order that groups identical bins together:
+    # use the inverse mapping to get a sort order that groups identical bins together:
     sort_order = xp.argsort(inverse)
 
-    # Apply the sort order to both arrays:
+    # apply the sort order to both arrays:
     bin_idx = unsorted_indices_idx[sort_order]
     bin_val = unsorted_indices_val[sort_order]
 
-    # (Optional) Now, using xp.unique on the sorted bin_idx, get the start indices and counts:
-    unique_bins, bin_starts, bin_counts = xp.unique(
-        bin_idx, axis=0, return_index=True, return_counts=True
+    # now, using _unique on the sorted bin_idx, get the start indices and counts:
+    unique_bins, bin_starts, bin_counts = _unique(
+        bin_idx, return_index=True, return_counts=True
     )
 
-    return bin_val, unique_bins, bin_starts, bin_counts
+    # compute distances
+    target_coords = grid[xp.repeat(unique_bins[:, -1], bin_counts, axis=0), :]
+    source_coords = coords[bin_val, :]
+    distances = target_coords - source_coords
+
+    # compute weights
+    weights = distances
+    ...
+
+    # compute table index
+    tab_idx = (radius + xp.round(distances * pfac) / pfac) / stepsize
+    tab_idx = xp.round(tab_idx).astype(xp.float32)
+    tab_idx = tab_idx * xp.asarray([nsteps**2, nsteps, 1.0], dtype=xp.float32)
+    tab_idx = xp.round(tab_idx).astype(int).sum(axis=-1)
+
+    return bin_val, weights, tab_idx, unique_bins, bin_starts, bin_counts
+
+
+def _unique(arr, return_index=False, return_inverse=False, return_counts=False):
+    device = get_device(arr)
+    xp = device.xp
+    with device:
+        sorted_idx = xp.lexsort(arr.T)
+        sorted_arr = arr[sorted_idx]
+
+        unique_mask = xp.empty(arr.shape[0], dtype=bool)
+        unique_mask[0] = True
+        unique_mask[1:] = xp.any(sorted_arr[1:] != sorted_arr[:-1], axis=1)
+        unique_mask_idx = xp.where(unique_mask)[0]
+
+        unique_vals = sorted_arr[unique_mask_idx]
+
+        results = [unique_vals]
+
+        if return_index:
+            index = sorted_idx[unique_mask_idx]
+            results.append(index)
+
+        if return_inverse:
+            inverse = xp.empty(arr.shape[0], dtype=int)
+            inverse[sorted_idx] = xp.cumsum(unique_mask) - 1
+            results.append(inverse)
+
+        if return_counts:
+            counts = np.diff(xp.append(unique_mask_idx, arr.shape[0]))
+            results.append(counts)
+
+    return tuple(results) if len(results) > 1 else results[0]
 
 
 @with_numpy
