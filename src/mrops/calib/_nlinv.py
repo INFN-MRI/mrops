@@ -122,7 +122,7 @@ def nlinv_calib(
 
     # Setup problem
     if coords is None:
-        NONCART, oshape, cshape, mask, y, _nlinv = _setup_cartesian(
+        NONCART, oshape, cshape, cshape0, mask, y, _nlinv = _setup_cartesian(
             y,
             ndim,
             mask,
@@ -131,7 +131,16 @@ def nlinv_calib(
             sobolev_deg,
         )
     else:
-        NONCART, oshape, cshape, coords, weights, y, _nlinv = _setup_noncartesian(
+        (
+            NONCART,
+            oshape,
+            cshape,
+            cshape0,
+            coords,
+            weights,
+            y,
+            _nlinv,
+        ) = _setup_noncartesian(
             y,
             shape,
             coords,
@@ -142,6 +151,7 @@ def nlinv_calib(
             sobolev_width,
             sobolev_deg,
         )
+    cshape0 = list(cshape0) if isinstance(cshape0, (list, tuple)) else cshape0.tolist()
     cshape = list(cshape) if isinstance(cshape, (list, tuple)) else cshape.tolist()
     xhat0 = _initialize_guess(device, n_coils, cshape, xp, y.dtype)
 
@@ -165,7 +175,9 @@ def nlinv_calib(
         record_time,
     ).run()
 
-    return _postprocess_output(NONCART, _nlinv, xhat, yscale, cshape, oshape, ret_image)
+    return _postprocess_output(
+        NONCART, _nlinv, xhat, yscale, cshape0, oshape, ret_image
+    )
 
 
 def _setup_cartesian(y, ndim, mask, cal_width, sobolev_width, sobolev_deg):  # noqa
@@ -199,7 +211,7 @@ def _setup_cartesian(y, ndim, mask, cal_width, sobolev_width, sobolev_deg):  # n
         get_device(y), y.shape[0], mask, sobolev_width / n**2, sobolev_deg
     )
 
-    return False, ishape, cshape, mask, y, _nlinv
+    return False, ishape, cshape, cshape, mask, y, _nlinv
 
 
 def _setup_noncartesian(
@@ -229,6 +241,7 @@ def _setup_noncartesian(
     # If we are reconstructing a low res image, extend ACR
     # to make sure corners are properly reconstructed in the target ACR
     osf = 1 if cal_width == min(ishape) else 2**0.5
+    cal_width0 = int(np.ceil(cal_width).item())
     cal_width = int(np.ceil(osf * cal_width).item())
 
     # Now extract ACR
@@ -241,6 +254,7 @@ def _setup_noncartesian(
         y *= weights**0.5
 
     # Get calibration shape
+    cshape0 = len(ishape) * [cal_width0]
     cshape = len(ishape) * [cal_width]
 
     # Scale Sobolev width
@@ -259,7 +273,7 @@ def _setup_noncartesian(
         sobolev_deg,
     )
 
-    return True, ishape, cshape, coords, weights, y, _nlinv
+    return True, ishape, cshape, cshape0, coords, weights, y, _nlinv
 
 
 def _estimate_mask(y, ndim, xp):  # noqa
