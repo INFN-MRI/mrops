@@ -2,39 +2,35 @@
 
 __all__ = ["train"]
 
-from numpy.typing import ArrayLike
+import warnings
+
+from numpy.typing import NDArray
 
 import numpy as np
 from scipy.linalg import expm, logm
-from scipy.linalg import fractional_matrix_power as fmp
 
 from mrinufft._array_compat import with_numpy
 
 from ..solvers import tikhonov_lstsq
 
 
-@with_numpy
 def train(
-    train_data: ArrayLike,
-    lamda: float = 0.01,
-    nsteps: int = 11,
-    coords: ArrayLike | None = None,
+    train_data: NDArray[complex],
+    lamda: float = 0.0,
+    coords: NDArray[float] | None = None,
 ) -> dict:
     """
     Train GRAPPA Operator Gridding (GROG) interpolator.
 
     Parameters
     ----------
-    train_data : np.ndarray | torch.Tensor
+    train_data : NDArray[complex]
         Calibration region data of shape ``(nc, nz, ny, nx)`` or ``(nc, ny, nx)``.
         Usually a small portion from the center of kspace.
     lamda : float, optional
         Tikhonov regularization parameter.  Set to 0 for no
-        regularization. Defaults to ``0.01``.
-    nsteps : int, optional
-        K-space interpolation grid discretization. Defaults to ``11``
-        steps (i.e., ``dk = -0.5, -0.4, ..., 0.0, ..., 0.4, 0.5``)
-    coords : ArrayLike, optional
+        regularization. Defaults to ``0.0``.
+    coords : NDArray[float], optional
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT
         (``None`` for Cartesian).
@@ -42,8 +38,8 @@ def train(
     Returns
     -------
     dict
-        Output grog interpolator with keys ``(gx, gy)`` (single slice 2D)
-        or ``(gx, gy, gz)`` (multi-slice or 3D).
+        Output grog interpolator with keys ``(x, y)`` (single slice 2D)
+        or ``(x, y, z)`` (multi-slice or 3D).
 
     Notes
     -----
@@ -60,6 +56,14 @@ def train(
            resonance in medicine 54.6 (2005): 1553-1556.
 
     """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore")
+        return _train(train_data, lamda, coords)
+
+
+# %% subroutines
+@with_numpy
+def _train(train_data, lamda, coords):
     if coords is None:
         ndim = len(train_data.shape) - 1
     else:
@@ -67,17 +71,6 @@ def train(
 
     # get grappa operator
     kern = _calc_grappaop(ndim, train_data, lamda, coords)
-
-    # build interpolator
-    # deltas = (np.arange(nsteps) - (nsteps - 1) // 2) / (nsteps - 1)
-    # Dx = _grog_power(kern["Gx"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
-    # Dy = _grog_power(kern["Gy"], deltas).astype(np.complex64)  # (nsteps, nc, nc)
-    # if ndim == 3:
-    #     Dz = _grog_power(kern["Gz"], deltas).astype(
-    #         np.complex64
-    #     )  # (nsteps, nc, nc), 3D only
-    # else:
-    #     Dz = None
     Gx = kern["Gx"]
     Gy = kern["Gy"]
     if ndim == 3:
@@ -88,7 +81,6 @@ def train(
     return {"x": Gx, "y": Gy, "z": Gz}
 
 
-# %% subroutines
 def _calc_grappaop(ndim, train_data, lamda, coords):
     train_data = train_data / np.linalg.norm(train_data)
     if coords is not None:
@@ -184,27 +176,3 @@ def _grappa_op_3d(calib, lamda):
     Gx = tikhonov_lstsq(Sx, Tx, lamda)
 
     return Gz, Gy, Gx
-
-
-def _grog_power(G, exponents):
-    D, idx = [], 0
-    for exp in exponents:
-        if np.isclose(exp, 0.0):
-            _D = np.eye(G.shape[0], dtype=G.dtype)
-        else:
-            _D = fmp(G, np.abs(exp)).astype(G.dtype)
-            if np.sign(exp) < 0:
-                _D = np.linalg.pinv(_D).astype(G.dtype)
-        D.append(_D)
-        idx += 1
-
-    return np.stack(D, axis=0)
-
-    # V, E = np.linalg.eig(G)
-
-    # # raise to power along expanded first dim
-    # V = V ** weight[:, None]
-    # V = np.apply_along_axis(np.diag, 1, V)
-
-    # # put together and return
-    # return E @ V @ np.linalg.inv(E)
