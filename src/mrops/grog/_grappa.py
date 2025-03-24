@@ -16,7 +16,7 @@ from ..solvers import tikhonov_lstsq
 
 def train(
     train_data: NDArray[complex],
-    lamda: float = 0.0,
+    lamda: float | None = None,
     coords: NDArray[float] | None = None,
 ) -> dict:
     """
@@ -27,9 +27,10 @@ def train(
     train_data : NDArray[complex]
         Calibration region data of shape ``(nc, nz, ny, nx)`` or ``(nc, ny, nx)``.
         Usually a small portion from the center of kspace.
-    lamda : float, optional
+    lamda : float | None, optional
         Tikhonov regularization parameter.  Set to 0 for no
-        regularization. Defaults to ``0.0``.
+        regularization. Defaults to ``0.01`` for standard GROG.
+        and ``0.0`` for self-calibrating GROG.
     coords : NDArray[float], optional
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT
@@ -56,6 +57,8 @@ def train(
            resonance in medicine 54.6 (2005): 1553-1556.
 
     """
+    if lamda is None:
+        lamda = 0.01 if coords is None else 0.0
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore")
         return _train(train_data, lamda, coords)
