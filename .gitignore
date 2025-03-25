@@ -22,4 +22,4 @@ tmp/
 docs/generated/
 docs_build/
 
-src/mrbabel/_version.py
+src/mrops/_version.py
