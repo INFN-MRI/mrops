@@ -314,8 +314,8 @@ def _postprocess_output(
     smaps = smaps / rss
 
     # Normalize phase
-    phref = smaps[0] / abs(smaps[0])
-    smaps = phref.conj() * smaps
+    # phref = smaps[0] / abs(smaps[0])
+    # smaps = phref.conj() * smaps
 
     # Get GRAPPA training data
     grappa_train = fft(smaps * rho, axes=tuple(range(-rho.ndim, 0)), norm="ortho")
@@ -336,76 +336,19 @@ def _postprocess_output(
     return smaps, grappa_train
 
 
-def simu(x, y):
-    """
-    Simulate object and coil sensitivities, then apply undersampling.
-
-    Parameters
-    ----------
-    x, y : int
-        Dimensions of the image.
-
-    Returns
-    -------
-    R : ndarray (4, y, x)
-        Simulated undersampled k-space data.
-    """
-    X = np.zeros((5, y, x), dtype=np.complex64)  # Storage order reversed from MATLAB
-
-    i, j = np.meshgrid(np.arange(y), np.arange(x), indexing="ij")
-    d = ((i / y) - 0.5) ** 2 + ((j / x) - 0.5) ** 2
-
-    # Object
-    X[0, d < 0.4**2] = 1.0
-
-    # Coil sensitivities
-    d1 = ((i / y) - 1.0) ** 2 + ((j / x) - 0.0) ** 2
-    d2 = ((i / y) - 1.0) ** 2 + ((j / x) - 1.0) ** 2
-    d3 = ((i / y) - 0.0) ** 2 + ((j / x) - 0.0) ** 2
-    d4 = ((i / y) - 0.0) ** 2 + ((j / x) - 1.0) ** 2
-
-    X[1] = np.exp(-d1)
-    X[2] = np.exp(-d2)
-    X[3] = np.exp(-d3)
-    X[4] = np.exp(-d4)
-
-    # Undersampling pattern
-    P = np.zeros((y, x))
-    P[:, ::2] = 1.0  # Every other column
-    P[:, (y // 2 - 8) : (y // 2 + 8)] = 1.0  # Center region
-
-    # Simulate k-space data
-    return op(P, X), P
-
-
-def op(P, X):
-    """
-    Apply forward model operator.
-
-    Parameters
-    ----------
-    P : ndarray (..., y, x)
-        Sampling pattern.
-    X : ndarray (..., c+1, y, x)
-        Input image data.
-
-    Returns
-    -------
-    K : ndarray (..., c, y, x)
-        Output k-space data.
-    """
-    K = np.zeros_like(X[..., 1:, :, :], dtype=np.complex64)
-    for i in range(X.shape[-3] - 1):
-        K[..., i, :, :] = P * myfft(X[..., 0, :, :] * X[..., i + 1, :, :])
-    return K
-
-
-def myfft(x):
-    """Apply FFT with correct shifting."""
-    return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(x), norm="ortho"))
-
-
 # %% util
+def kspace_filter(shape, kw, ell, device):
+    xp = device.xp
+    with device:
+        kgrid = xp.meshgrid(
+            *[xp.arange(-n // 2, n // 2, dtype=xp.float32) for n in shape],
+            indexing="ij",
+        )
+    k_norm = sum(ki**2 for ki in kgrid)
+    weights = 1.0 / (1 + kw * k_norm) ** (ell / 2)
+    return weights.astype(xp.float32)
+
+
 class BaseNlinvOp(NonLinop):
     def __init__(
         self,
@@ -436,21 +379,11 @@ class BaseNlinvOp(NonLinop):
             shape = tuple(self.matrix_size.tolist())
         except Exception:
             shape = tuple(self.matrix_size)
-        n_dims = len(shape)
-
-        # Get weighting
-        xp = self.device.xp
-        with self.device:
-            kgrid = xp.meshgrid(
-                *[xp.arange(-n // 2, n // 2, dtype=xp.float32) for n in shape],
-                indexing="ij",
-            )
-        k_norm = sum(ki**2 for ki in kgrid)
-        weights = 1.0 / (1 + kw * k_norm) ** (ell / 2)
+        weights = kspace_filter(self.matrix_size, kw, ell, self.device)
 
         # Build operators
-        FH = IFFT(shape, axes=tuple(range(-n_dims, 0)))
-        W = linop.Multiply(shape, weights.astype(xp.float32))
+        FH = IFFT(shape, axes=tuple(range(-len(shape), 0)))
+        W = linop.Multiply(shape, weights)
         return FH * W
 
     def _compute_forward(self, xhat):
@@ -513,7 +446,6 @@ class NonCartesianNlinvOp(BaseNlinvOp):
         return NonCartesianMR(shape, coords, weights, True, oversamp, eps)
 
 
-# %% Utility class to enable Toeplitz in NLINV
 class _NlinvJacobian(linop.Linop):
     def __init__(self, matrix_size, W, PF, x):
         """Compute derivative of forward operator."""
