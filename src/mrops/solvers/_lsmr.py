@@ -21,7 +21,7 @@ from .._sigpy.app import App
 from .._sigpy.alg import Alg
 from .._sigpy.linop import Linop
 
-from ..interop import aslinearoperator
+from ..interop import aslinearoperator, StackedLinearOperator
 
 
 class LSMR(App):

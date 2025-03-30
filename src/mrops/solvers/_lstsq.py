@@ -5,15 +5,16 @@ __all__ = ["tikhonov_lstsq"]
 
 from numpy.typing import NDArray
 
-import torch
+import numpy as np
+import numba as nb
 
-from mrinufft._array_compat import with_torch
+from mrinufft._array_compat import with_numpy_cupy
 
 
 @with_torch
 def tikhonov_lstsq(A: NDArray, b: NDArray, lamda: float = 0.0) -> NDArray:
     """
-    Batched Tikhonov-regularized least squares using PyTorch.
+    Batched Tikhonov-regularized least squares using Numpy/Cupy.
 
     Solves [ A ; sqrt(lambda) * I ] x = [ b ; 0 ] for each batch.
 
