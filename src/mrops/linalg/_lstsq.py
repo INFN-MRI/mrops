@@ -27,6 +27,8 @@ def lstsq(
     damp: float | list[float] | tuple[float] = 0.0,
     R: NDArray[complex | float] | list[NDArray[complex | float]] | None = None,
     bias: NDArray[complex | float] | None = None,
+    C: NDArray[complex | float] | None = None,
+    d: NDArray[complex | float] | None = None,
     verbose: bool = False,
     record_time: bool = False,
 ):
@@ -37,12 +39,15 @@ def lstsq(
 
         minimize 0.5 * || A @ x - b ||^2_2 + 0.5 * Σ_i damp_i * || R_i @ x - bias_i ||^2_2
 
+        subject to C @ x = d
+
     where:
         - ``A`` is the normal (Hermitian) linear operator.
         - ``b`` are the measured data.
         - Each ``damp_i`` is a scalar controlling the strength of ``R_i``.
         - Each ``R_i`` is a regularization linear operator.
         - Each ``bias_i`` is a prior for L2 regularization.
+        - ``C`` and ``d`` describe optional equality constraints for our problem.
 
     Notes
     -----
@@ -55,8 +60,9 @@ def lstsq(
     ----------
     A : NDArray[complex | float]
         Matrix representing the linear operator that computes the action of A on a vector.
+        It has shape ``(*, M, N)``
     b : NDArray[complex | float]
-        Right-hand side observation vector.
+        Right-hand side observation vector. It has shape ``(*, N)``
     damp: float | list[float] | tuple[float], optional
         Regularization strength. If scalar, assume same regularization
         for all the priors. The default is ``0.0``.
@@ -66,6 +72,10 @@ def lstsq(
     bias: NDArray[complex | float] | None, optional
         Bias for L2 regularization (prior image).
         The default is ``None``.
+    C: NDArray[complex | float] | None, optional
+        Equality constraint matrix of shape ``(P, N)``. The default is ``None``.
+    d: NDArray[complex | float] | None, optional
+        Equality constraint right hand side of shape ``(P,)``. The default is ``None``.
     verbose : bool, optional
         Toggle whether show progress (default is ``False``).
     record_time : bool, optional
@@ -83,6 +93,8 @@ def lstsq(
         damp,
         R,
         bias,
+        C,
+        d,
         verbose,
         record_time,
     )
@@ -119,6 +131,10 @@ class LSTSQ(App):
     bias: NDArray[complex | float] | None, optional
         Bias for L2 regularization (prior image).
         The default is ``None``.
+    C: NDArray[complex | float] | None, optional
+        Equality constraint matrix of shape ``(P, N)``. The default is ``None``.
+    d: NDArray[complex | float] | None, optional
+        Equality constraint right hand side of shape ``(P,)``. The default is ``None``.
     verbose : bool, optional
         Toggle whether show progress (default is ``False``).
     record_time : bool, optional
@@ -133,10 +149,12 @@ class LSTSQ(App):
         damp: float | list[float] | tuple[float] = 0.0,
         R: NDArray[complex | float] | list[NDArray[complex | float]] | None = None,
         bias: NDArray[complex | float] | None = None,
+        C: NDArray[complex | float] | None = None,
+        d: NDArray[complex | float] | None = None,
         verbose: bool = False,
         record_time: bool = False,
     ):
-        _alg = _LSTSQ(A, b, damp, R, bias, record_time, verbose)
+        _alg = _LSTSQ(A, b, damp, R, bias, C, d, record_time, verbose)
         super().__init__(_alg, False, False, False)
 
     def _output(self):
@@ -155,12 +173,16 @@ class _LSTSQ(Alg):
         damp: float | list[float] | tuple[float] | None = None,
         R: NDArray[complex | float] | list[NDArray[complex | float]] | None = None,
         bias: NDArray[complex | float] | None = None,
+        C: NDArray[complex | float] | None = None,
+        d: NDArray[complex | float] | None = None,
         verbose: bool = False,
         record_time: bool = False,
     ):
         A_reg, b_reg = build_extended_system(A, b, damp, R, bias)
         self.A = A_reg
         self.b = b_reg
+        self.C = C
+        self.d = d
         self._finished = False
         self._verbose = verbose
         self._record_time = record_time
@@ -178,6 +200,8 @@ class _LSTSQ(Alg):
         self.x = _lstsq(
             self.A,
             self.b,
+            self.C,
+            self.d,
         )  # here we let scipy/cupy handle steps.
         if self._verbose:
             print("LSTSQ end")
@@ -195,8 +219,34 @@ class _LSTSQ(Alg):
 
 
 @with_torch
-def _lstsq(A, b):
-    x = torch.linalg.lstsq(A, b, rcond=None)[0]
+def _lstsq(A, b, C, d):
+    if C is None and d is None:
+        x = torch.linalg.lstsq(A, b, rcond=None)[0]
+    else:
+        if C is None or d is None:
+            raise ValueError(
+                "For equality constrained problems, please provide both C and d"
+            )
+        p = C.shape[0]
+
+        # Compute QR decomposition of B^T once (batch-independent)
+        Q, R = torch.linalg.qr(C.T)  # Q: (n, n), R: (p, p)
+
+        # Solve R^T y = d (only once, since B and d are not batched)
+        y = torch.linalg.solve(R[:p, :p].T, d)  # y: (p,)
+
+        # Transform A using Q
+        A_transformed = A @ Q  # Shape: (batch, m, n)
+
+        # Solve reduced least squares problem for each batch
+        z = torch.linalg.lstsq(
+            A_transformed[:, :, p:], (b - (A_transformed[:, :, :p] @ y)), rcond=None
+        )[0]
+
+        # Compute final solution
+        x = (Q[:, :p] @ y) + (Q[:, p:] @ z)
+
+    # Post process
     if x.ndim == 3:
         x = x.swapaxes(0, -1)[..., 0]
     if x.shape[0] == 1:
