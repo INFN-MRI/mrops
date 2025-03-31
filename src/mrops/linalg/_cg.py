@@ -104,9 +104,9 @@ def cg(
         x,
         max_iter,
         tol,
+        verbose,
         record_stats,
         record_time,
-        verbose,
         solution,
     )
     return solver.run()
@@ -183,9 +183,9 @@ class ConjugateGradient(App):
             x,
             max_iter,
             tol,
+            verbose,
             record_stats,
             record_time,
-            verbose,
             solution,
         )
         super().__init__(_alg, False, False, False)
@@ -209,9 +209,9 @@ class _ConjugateGradient(Alg):
         x: NDArray[complex] | None = None,
         max_iter: int = 10,
         tol: float = 0.0,
+        verbose: bool = False,
         record_stats: bool = False,
         record_time: bool = False,
-        verbose: bool = True,
         solution: NDArray[complex] | None = None,
     ):
         A_reg, b_reg = build_extended_square_system(A, b, R, damp, bias)
@@ -235,11 +235,11 @@ class _ConjugateGradient(Alg):
 
         # build callable
         if self._record_stats:
-            callback = Monitor(self.A_reg, self.b_reg, self._verbose, self._solution)
+            callback = Monitor(self.A, self.b, self._verbose, self._solution)
             timer = callback
         elif self._record_time:
             callback = None
-            timer = Monitor(self.A_reg, self.b_reg, self._verbose, self._solution)
+            timer = Monitor(self.A, self.b, self._verbose, self._solution)
         else:
             callback = None
 

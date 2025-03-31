@@ -24,7 +24,7 @@ from ._reginversion import build_extended_system
 def lstsq(
     A: NDArray[complex | float],
     b: NDArray[complex | float],
-    damp: float | list[float] | tuple[float] | None = None,
+    damp: float | list[float] | tuple[float] = 0.0,
     R: NDArray[complex | float] | list[NDArray[complex | float]] | None = None,
     bias: NDArray[complex | float] | None = None,
     verbose: bool = False,
@@ -57,7 +57,7 @@ def lstsq(
         Matrix representing the linear operator that computes the action of A on a vector.
     b : NDArray[complex | float]
         Right-hand side observation vector.
-    damp: float | list[float] | tuple[float] | None, optional
+    damp: float | list[float] | tuple[float], optional
         Regularization strength. If scalar, assume same regularization
         for all the priors. The default is ``0.0``.
     R: NDArray[complex | float] | list[NDArray[complex | float]] | None, optional
@@ -66,6 +66,8 @@ def lstsq(
     bias: NDArray[complex | float] | None, optional
         Bias for L2 regularization (prior image).
         The default is ``None``.
+    verbose : bool, optional
+        Toggle whether show progress (default is ``False``).
     record_time : bool, optional
         Toggle wheter record runtime (default is ``False``).
 
@@ -78,11 +80,11 @@ def lstsq(
     solver = LSTSQ(
         A,
         b,
-        R,
         damp,
+        R,
         bias,
-        record_time,
         verbose,
+        record_time,
     )
     return solver.run()
 
@@ -108,7 +110,7 @@ class LSTSQ(App):
         Matrix representing the linear operator that computes the action of A on a vector.
     b : NDArray[complex | float]
         Right-hand side observation vector.
-    damp: float | list[float] | tuple[float] | None, optional
+    damp: float | list[float] | tuple[float], optional
         Regularization strength. If scalar, assume same regularization
         for all the priors. The default is ``0.0``.
     R: NDArray[complex | float] | list[NDArray[complex | float]] | None, optional
@@ -117,6 +119,8 @@ class LSTSQ(App):
     bias: NDArray[complex | float] | None, optional
         Bias for L2 regularization (prior image).
         The default is ``None``.
+    verbose : bool, optional
+        Toggle whether show progress (default is ``False``).
     record_time : bool, optional
         Toggle wheter record runtime (default is ``False``).
 
@@ -126,13 +130,13 @@ class LSTSQ(App):
         self,
         A: NDArray[complex | float],
         b: NDArray[complex | float],
+        damp: float | list[float] | tuple[float] = 0.0,
         R: NDArray[complex | float] | list[NDArray[complex | float]] | None = None,
-        damp: float | list[float] | tuple[float] | None = None,
         bias: NDArray[complex | float] | None = None,
         verbose: bool = False,
         record_time: bool = False,
     ):
-        _alg = _LSTSQ(A, b, R, damp, bias, record_time, verbose)
+        _alg = _LSTSQ(A, b, damp, R, bias, record_time, verbose)
         super().__init__(_alg, False, False, False)
 
     def _output(self):
@@ -165,7 +169,7 @@ class _LSTSQ(Alg):
 
     def update(self):  # noqa
         if self._record_time:
-            timer = Monitor(self.A_reg, self.b_reg)
+            timer = Monitor(self.A, self.b)
             timer.start_timer()
 
         # actual run

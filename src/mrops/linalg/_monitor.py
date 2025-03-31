@@ -53,6 +53,7 @@ class Monitor:
     def start_timer(self):
         if CUPY_AVAILABLE:
             self._start_gpu = cp.cuda.Event()
+            self._stop_gpu = cp.cuda.Event()
             self._start_gpu.record()
         self._start_cpu = time.perf_counter()
 

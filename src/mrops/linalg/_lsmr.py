@@ -96,7 +96,7 @@ def lsmr(
         Solution to the problem.
 
     """
-    solver = LSMR(A, b, damp, R, bias, x, max_iter, tol, record_time, verbose)
+    solver = LSMR(A, b, damp, R, bias, x, max_iter, tol, verbose, record_time)
     return solver.run()
 
 
@@ -160,7 +160,7 @@ class LSMR(App):
         verbose: bool = False,
         record_time: bool = False,
     ):
-        _alg = _LSMR(A, b, damp, R, bias, x, max_iter, tol, record_time, verbose)
+        _alg = _LSMR(A, b, damp, R, bias, x, max_iter, tol, verbose, record_time)
         super().__init__(_alg, False, False, False)
 
     def _output(self):
@@ -182,8 +182,8 @@ class _LSMR(Alg):
         x: NDArray[complex] = None,
         max_iter: int = 10,
         tol: float = 0.0,
+        verbose: bool = False,
         record_time: bool = False,
-        verbose: bool = True,
     ):
         A_reg, b_reg = build_extended_system(A, b, R, damp, bias)
         self.ishape = A.ishape
@@ -201,7 +201,7 @@ class _LSMR(Alg):
     def update(self):  # noqa
         # start timer
         if self._record_time:
-            timer = Monitor(self.A_reg, self.b_reg)
+            timer = Monitor(self.A, self.b)
             timer.start_timer()
 
         # actual run

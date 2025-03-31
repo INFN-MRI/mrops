@@ -49,7 +49,6 @@ def aslinearoperator(A: Linop, input: NDArray) -> LinearOperator:
 class StackedLinearOperator(spla.LinearOperator):
     """
     Stack the encoding operator A with the regularization operators R.
-    Handles damping factors and biases.
 
     Attributes
     ----------
