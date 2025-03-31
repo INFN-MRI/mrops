@@ -133,7 +133,7 @@ class ConjugateGradient(App):
         Linear operator or function that computes the action of A on a vector.
     b : NDArray[complex]
         Right-hand side observation vector.
-    damp: float | list[float] | tuple[float] | None, optional
+    damp: float | list[float] | tuple[float], optional
         Regularization strength. If scalar, assume same regularization
         for all the priors. The default is ``0.0``.
     R: Linop | list[Linop] | None, optional
@@ -163,7 +163,7 @@ class ConjugateGradient(App):
         self,
         A: Linop,
         b: NDArray[complex],
-        damp: float | list[float] | tuple[float] | None = None,
+        damp: float | list[float] | tuple[float] = 0.0,
         R: Linop | list[Linop] | None = None,
         bias: NDArray[complex] | None = None,
         x: NDArray[complex] | None = None,
@@ -215,6 +215,8 @@ class _ConjugateGradient(Alg):
         solution: NDArray[complex] | None = None,
     ):
         A_reg, b_reg = build_extended_square_system(A, b, R, damp, bias)
+        self.ishape = A.ishape
+        self.oshape = A.oshape
         self.A = A_reg
         self.b = b_reg
         self.x = x
@@ -230,9 +232,6 @@ class _ConjugateGradient(Alg):
     def update(self):  # noqa
         if self.x is None:
             self.x = 0 * self.b
-
-        # get shape
-        shape = self.b.shape
 
         # build callable
         if self._record_stats:
@@ -259,8 +258,7 @@ class _ConjugateGradient(Alg):
             maxiter=self.max_iter,
             callback=callback,
         )  # here we let scipy/cupy handle steps.
-        self.b = self.b.reshape(*shape)
-        self.x = self.x.reshape(*shape)
+        self.x = self.x.reshape(*self.ishape)
         if self._verbose:
             print("CG end")
 

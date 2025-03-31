@@ -6,7 +6,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from mrinufft._array_compat import CUPY_AVAILABLE
-from mrinufft._array_compat import get_array_module
 from mrinufft._array_compat import with_numpy_cupy
 
 import scipy.sparse.linalg as spla
@@ -14,6 +13,7 @@ import scipy.sparse.linalg as spla
 if CUPY_AVAILABLE:
     import cupyx.scipy.sparse.linalg as cupy_spla
 
+from .._sigpy import get_array_module, get_device
 from .._sigpy.linop import Linop
 
 LinearOperator = spla.LinearOperator
@@ -59,15 +59,13 @@ class StackedLinearOperator(spla.LinearOperator):
         List of regularization operators (R).
     lamda : list of floats
         List of damping factors (λ).
-    bias : list of NDArray
-        List of bias terms for each regularization operator (R).
+
     """
 
-    def __init__(self, A, Rop, lamda, bias):
+    def __init__(self, A, Rop, lamda):
         self.A = A  # The main encoding operator
         self.Rop = Rop  # Regularization operators
         self.lamda = lamda  # Damping factors
-        self.bias = bias  # Bias terms
         self.num_reg = len(Rop)  # Number of regularizers
 
         # Compute the stacked shapes
@@ -77,37 +75,28 @@ class StackedLinearOperator(spla.LinearOperator):
         super().__init__(dtype=A.dtype, shape=(oshape, ishape))
 
     def _matvec(self, x):
-        # Split x into the part corresponding to the main operator A and the regularization terms
-        x_A = x[: self.A.ishape[0]]  # First part corresponds to A
-        x_R = x[
-            self.A.ishape[0] :
-        ]  # Remaining part corresponds to regularization terms
+        device = get_device(x)
+        xp = device.xp
 
         # Apply the encoding operator A
-        y_A = self.A.matvec(x_A)
+        y_A = self.A.matvec(x)
+        y_R = []
 
         # Apply the regularization operators with their damping factors
-        y_R = np.zeros_like(x_R)
-        offset = 0
         for i in range(self.num_reg):
             R = self.Rop[i]
             lamda = self.lamda[i]
-            bias = self.bias[i]
 
             # Regularization term: sqrt(lamda) * R * x_R[i]
-            y_R[offset : offset + R.oshape[0]] = np.sqrt(lamda) * R.matvec(
-                x_R[offset : offset + R.ishape[0]]
-            )
-
-            # Adding the bias term (scaled by sqrt(lamda))
-            y_R[offset : offset + R.oshape[0]] += np.sqrt(lamda) * bias
-
-            offset += R.oshape[0]
+            y_R.append(lamda**0.5 * R.matvec(x))
 
         # Combine results from the encoding and regularization operators
-        return np.concatenate([y_A, y_R])
+        return xp.concatenate([y_A, *y_R])
 
     def _rmatvec(self, y):
+        device = get_device(y)
+        xp = device.xp
+
         # Split y into the part corresponding to the main operator A and the regularization terms
         y_A = y[: self.A.oshape[0]]  # First part corresponds to A
         y_R = y[
@@ -115,28 +104,21 @@ class StackedLinearOperator(spla.LinearOperator):
         ]  # Remaining part corresponds to regularization terms
 
         # Apply the adjoint of the encoding operator A
-        x_A = self.A.rmatvec(y_A)
+        x = self.A.rmatvec(y_A)
 
         # Apply the adjoint of the regularization operators with their damping factors
-        x_R = np.zeros_like(y_R)
         offset = 0
         for i in range(self.num_reg):
             R = self.Rop[i]
             lamda = self.lamda[i]
-            bias = self.bias[i]
 
             # Regularization term: sqrt(lamda) * R.H * y_R[i]
-            x_R[offset : offset + R.ishape[0]] = np.sqrt(lamda) * R.rmatvec(
-                y_R[offset : offset + R.oshape[0]]
-            )
-
-            # Adding the bias term (scaled by sqrt(lamda))
-            x_R[offset : offset + R.ishape[0]] += np.sqrt(lamda) * bias
+            x += lamda**0.5 * R.rmatvec(y_R[offset : offset + R.oshape[0]])
 
             offset += R.ishape[0]
 
         # Combine results from the encoding and regularization operators
-        return np.concatenate([x_A, x_R])
+        return x
 
 
 class BaseSigpyLinearOperator:  # noqa

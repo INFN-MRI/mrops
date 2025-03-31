@@ -49,12 +49,11 @@ def build_extended_system(
     A, b, Rop, lamda, bias = _preprocess_system(A, b, Rop, lamda, bias)
 
     if A.__class__.__bases__[0].__name__ == "Linop":
-        # Now convert operators to Scipy/Cupy
         A = aslinearoperator(A, b)
         Rop = [aslinearoperator(R, b) for R, b in zip(Rop, bias)]
 
         # Create the stacked linear operator
-        A_reg = StackedLinearOperator(A, Rop, lamda, bias)
+        A_reg = StackedLinearOperator(A, Rop, lamda)
 
         # Extend the right-hand side vector with biases
         b_reg = xp.concatenate(

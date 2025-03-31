@@ -28,7 +28,7 @@ from ._reginversion import build_extended_system
 def lsmr(
     A: Linop,
     b: NDArray[complex],
-    damp: float | list[float] | tuple[float] | None = None,
+    damp: float | list[float] | tuple[float] = 0.0,
     R: Linop | list[Linop] | None = None,
     x: NDArray[complex] | None = None,
     bias: NDArray[complex] | None = None,
@@ -70,7 +70,7 @@ def lsmr(
         Linear operator or function that computes the action of A on a vector.
     b : NDArray[complex]
         Right-hand side observation vector.
-    damp: float | list[float] | tuple[float] | None, optional
+    damp: float | list[float] | tuple[float], optional
         Regularization strength. If scalar, assume same regularization
         for all the priors. The default is ``0.0``.
     R: Linop | list[Linop] | None, optional
@@ -125,7 +125,7 @@ class LSMR(App):
         Linear operator or function that computes the action of A on a vector.
     b : NDArray[complex]
         Right-hand side observation vector.
-    damp: float | list[float] | tuple[float] | None, optional
+    damp: float | list[float] | tuple[float], optional
         Regularization strength. If scalar, assume same regularization
         for all the priors. The default is ``0.0``.
     R: Linop | list[Linop] | None, optional
@@ -151,7 +151,7 @@ class LSMR(App):
         self,
         A: Linop,
         b: NDArray[complex],
-        damp: float | list[float] | tuple[float] | None = None,
+        damp: float | list[float] | tuple[float] = 0.0,
         R: Linop | list[Linop] | None = None,
         bias: NDArray[complex] | None = None,
         x: NDArray[complex] | None = None,
@@ -186,6 +186,8 @@ class _LSMR(Alg):
         verbose: bool = True,
     ):
         A_reg, b_reg = build_extended_system(A, b, R, damp, bias)
+        self.ishape = A.ishape
+        self.oshape = A.oshape
         self.A = A_reg
         self.b = b_reg
         self.x = x
@@ -197,8 +199,6 @@ class _LSMR(Alg):
         super().__init__(max_iter)
 
     def update(self):  # noqa
-        shape = self.b.shape
-
         # start timer
         if self._record_time:
             timer = Monitor(self.A_reg, self.b_reg)
@@ -214,8 +214,7 @@ class _LSMR(Alg):
             tol=self.tol,
             maxiter=self.max_iter,
         )  # here we let scipy/cupy handle steps.
-        self.b = self.b.reshape(*shape)
-        self.x = self.x.reshape(*shape)
+        self.x = self.x.reshape(*self.ishape)
         if self._verbose:
             print("LSMR end")
 
