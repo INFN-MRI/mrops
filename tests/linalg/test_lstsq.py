@@ -31,3 +31,24 @@ def test_lstsq_with_bias(matrix_system, damp, bias):
     A, b, x0 = matrix_system
     x = lstsq(A, b, damp=damp, bias=bias)
     np.testing.assert_allclose(x, x0, atol=1e-2)
+    
+    
+def test_lstsq_with_constraints():
+    """Test equality-constrained least squares solver."""
+    # Define a small least squares problem
+    A = np.asarray([[3.0, 2.0], [1.0, 4.0], [2.0, 1.0]])
+    b = np.asarray([1.0, 2.0, 3.0])
+
+    # Define constraints Bx = d
+    C = np.asarray([[1.0, 1.0]])  # Enforces x1 + x2 = 1
+    d = np.asarray([1.0])
+
+    # Solve the constrained least squares problem
+    x = lstsq(A, b, C=C, d=d)
+
+    # Verify constraints hold: Bx ≈ d
+    np.testing.assert_allclose(C @ x, d, atol=1e-6)
+
+    # Verify least squares approximation: Ax ≈ b
+    b_pred = A @ x
+    np.testing.assert_allclose(b_pred, b, atol=1e-2)  # Slight tolerance for LS error
