@@ -94,10 +94,6 @@ class StackedLinearOperator(spla.LinearOperator):
         return xp.concatenate([y_A, *y_R])
 
     def _rmatvec(self, y):
-        device = get_device(y)
-        xp = device.xp
-
-        # Split y into the part corresponding to the main operator A and the regularization terms
         y_A = y[: self.A.oshape[0]]  # First part corresponds to A
         y_R = y[
             self.A.oshape[0] :
@@ -115,7 +111,7 @@ class StackedLinearOperator(spla.LinearOperator):
             # Regularization term: sqrt(lamda) * R.H * y_R[i]
             x += lamda**0.5 * R.rmatvec(y_R[offset : offset + R.oshape[0]])
 
-            offset += R.ishape[0]
+            offset += R.oshape[0]
 
         # Combine results from the encoding and regularization operators
         return x
