@@ -3,11 +3,12 @@
 __all__ = ["build_extended_system", "build_extended_square_system"]
 
 from numpy.typing import NDArray
+from scipy.sparse.linalg import LinearOperator
 
 from .._sigpy import get_device
 from .._sigpy.linop import Linop, Identity
 
-from ..interop import aslinearoperator, LinearOperator, StackedLinearOperator
+from ..interop import aslinearoperator, StackedLinearOperator
 
 from mrinufft._array_compat import get_array_module
 
@@ -47,7 +48,7 @@ def build_extended_system(
     xp = get_array_module(b)
     A, b, Rop, lamda, bias = _preprocess_system(A, b, Rop, lamda, bias)
 
-    if isinstance(A, Linop):
+    if A.__class__.__bases__[0].__name__ == "Linop":
         # Now convert operators to Scipy/Cupy
         A = aslinearoperator(A, b)
         Rop = [aslinearoperator(R, b) for R, b in zip(Rop, bias)]
@@ -106,6 +107,9 @@ def build_extended_square_system(
     for l, R in zip(lamda, Rop):
         AHA_reg = AHA_reg + l * R.N
 
+    if A.__class__.__bases__[0].__name__ == "Linop":
+        AHA_reg = aslinearoperator(AHA_reg, b)
+
     # Extend the right-hand side vector with biases
     AHb_reg = AHb.ravel()
     for l, b in zip(lamda, bias):
@@ -119,26 +123,26 @@ def _preprocess_system(A, b, Rop, lamda, bias):
     xp = device.xp
 
     # Check if problem is sparse or dense
-    if isinstance(A, Linop):
-        dense = True
+    if A.__class__.__bases__[0].__name__ == "Linop":
+        dense = False
         m, n = A.oshape, A.ishape
     else:
-        dense = False
+        dense = True
         if A.ndim == 2:
             A = A[None, ...]
             b = b[None, ...]
         batch_size, m, n = A.shape
 
     # If no regularizers are provided but lamda is a scalar, use identity operator
-    if Rop is None and isinstance(lamda, (int, float)) and lamda != 0.0:
+    if Rop is None:
         if dense:
             with device:
                 Rop = [xp.eye(n, dtype=b.dtype)]
         else:
             Rop = [Identity(n)]  # Identity operator (I)
-    elif Rop is None:
-        Rop = []  # No regularization operators
-    elif dense:
+    elif isinstance(Rop, (list, tuple)) is False:
+        Rop = [Rop]
+    if dense:
         Rop = [R[None, ...] if R.ndim == 2 else R for R in Rop]
         Rop = [xp.repeat(R, batch_size, axis=0) if R.shape[0] == 1 else R for R in Rop]
 
@@ -153,6 +157,9 @@ def _preprocess_system(A, b, Rop, lamda, bias):
         )
 
     # Process bias (defaults to zero if None)
+    if bias is not None:
+        if isinstance(bias, (list, tuple)) is False:
+            bias = [bias]
     if bias is None:
         with device:
             bias = [xp.zeros(R.ishape, dtype=b.dtype) for R in Rop]
@@ -169,7 +176,7 @@ def _preprocess_system(A, b, Rop, lamda, bias):
         Rop, lamda, bias = [], [], []
 
     # Precompute Rop_r.H(bias_r) for each r
-    if isinstance(A, Linop):
+    if A.__class__.__bases__[0].__name__ == "Linop":
         bias = [R.H(b) for R, b in zip(Rop, bias)]
     else:
         bias = [R.conj().T @ b for R, b in zip(Rop, bias)]

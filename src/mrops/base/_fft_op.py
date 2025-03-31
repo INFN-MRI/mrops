@@ -37,11 +37,7 @@ class FFT(Linop):
         super().__init__(shape, shape)
 
     def _apply(self, input):
-        if self.axes is None and self.batched:
-            axes = list(range(-len(self.ishape, 0)))
-        else:
-            axes = self.axes
-        return fft(input, axes=axes, center=self.center)
+        return fft(input, axes=self.axes, center=self.center)
 
     def _adjoint_linop(self):
         return IFFT(self.ishape, axes=self.axes, center=self.center)
@@ -78,11 +74,7 @@ class IFFT(Linop):
         super().__init__(shape, shape)
 
     def _apply(self, input):
-        if self.axes is None and self.batched:
-            axes = list(range(-len(self.ishape, 0)))
-        else:
-            axes = self.axes
-        return ifft(input, axes=axes, center=self.center)
+        return ifft(input, axes=self.axes, center=self.center)
 
     def _adjoint_linop(self):
         return FFT(self.ishape, axes=self.axes, center=self.center)

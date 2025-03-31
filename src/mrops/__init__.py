@@ -7,7 +7,7 @@ from . import calib  # noqa
 from . import gadgets  # noqa
 from . import grog  # noqa
 from . import interop  # noqa
-from . import solvers  # noqa
+from . import linalg  # noqa
 
 from . import _linop  # noqa
 

@@ -11,7 +11,7 @@ from scipy.linalg import expm, logm
 
 from mrinufft._array_compat import with_numpy
 
-from ..solvers import tikhonov_lstsq
+from ..linalg import lstsq
 
 
 def train(
@@ -115,7 +115,7 @@ def _radial_grappa_op(calib, lamda, coords):
     T = calib[:, 1:, ...]
 
     # train the operator
-    Gtheta = tikhonov_lstsq(S, T, lamda)
+    Gtheta = lstsq(S, T, lamda)
     lGtheta = np.stack([logm(G) for G in Gtheta])
     lGtheta = np.reshape(lGtheta, (nr, nc**2), "F")
 
@@ -126,7 +126,7 @@ def _radial_grappa_op(calib, lamda, coords):
     dxy = dxy.astype(lGtheta.dtype)
 
     # solve
-    lG = tikhonov_lstsq(dxy, lGtheta, lamda)
+    lG = lstsq(dxy, lGtheta, lamda)
 
     # extract components
     lGx = np.reshape(lG[0, :], (nc, nc))
@@ -151,8 +151,8 @@ def _grappa_op_2d(calib, lamda):
     Tx = np.reshape(calib[1:, ...], (-1, nc))
 
     # train the operators:
-    Gy = tikhonov_lstsq(Sy, Ty, lamda)
-    Gx = tikhonov_lstsq(Sx, Tx, lamda)
+    Gy = lstsq(Sy, Ty, lamda)
+    Gx = lstsq(Sx, Tx, lamda)
 
     return Gy, Gx
 
@@ -174,8 +174,8 @@ def _grappa_op_3d(calib, lamda):
     Tx = np.reshape(calib[:, :, 1:, :], (-1, nc))
 
     # train the operators:
-    Gz = tikhonov_lstsq(Sz, Tz, lamda)
-    Gy = tikhonov_lstsq(Sy, Ty, lamda)
-    Gx = tikhonov_lstsq(Sx, Tx, lamda)
+    Gz = lstsq(Sz, Tz, lamda)
+    Gy = lstsq(Sy, Ty, lamda)
+    Gx = lstsq(Sx, Tx, lamda)
 
     return Gz, Gy, Gx

@@ -20,7 +20,7 @@ from .._linop import CartesianMR, NonCartesianMR
 from ..base._fftc import fft, ifft
 from ..base import IFFT
 from ..gadgets import MulticoilOp
-from ..solvers import IrgnmCG
+from ..linalg import IrgnmCG
 
 from ._acr import extract_acr
 
