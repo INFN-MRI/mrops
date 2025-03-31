@@ -197,6 +197,8 @@ class _LSTSQ(Alg):
 @with_torch
 def _lstsq(A, b):
     x = torch.linalg.lstsq(A, b, rcond=None)[0]
+    if x.ndim == 3:
+        x = x.swapaxes(0, -1)[..., 0]
     if x.shape[0] == 1:
         x = x[0]
     return x
