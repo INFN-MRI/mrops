@@ -16,8 +16,8 @@ from mrinufft._array_compat import get_array_module
 def build_extended_system(
     A: Linop,
     b: NDArray,
-    Rop: list[Linop],
     lamda: float | list[float],
+    Rop: list[Linop],
     bias: NDArray | list[NDArray],
 ) -> tuple[StackedLinearOperator | NDArray, NDArray]:
     """
@@ -30,10 +30,10 @@ def build_extended_system(
         The main encoding operator.
     b : NDArray
         The vector of observed data.
-    Rop : list[Linop]
-        The regularization operators.
     lamda : float | list[float]
         The damping factors for each regularization operator.
+    Rop : list[Linop]
+        The regularization operators.
     bias : NDArray | list[NDArray]
         The bias terms for each regularization operator.
 
@@ -46,7 +46,7 @@ def build_extended_system(
 
     """
     xp = get_array_module(b)
-    A, b, Rop, lamda, bias = _preprocess_system(A, b, Rop, lamda, bias)
+    A, b, lamda, Rop, bias = _preprocess_system(A, b, lamda, Rop, bias)
 
     if A.__class__.__bases__[0].__name__ == "Linop":
         A = aslinearoperator(A, b)
@@ -61,7 +61,7 @@ def build_extended_system(
         )
     else:
         A_reg = xp.concatenate([A] + [l**0.5 * R for l, R in zip(lamda, Rop)], axis=-2)
-        b_reg = xp.concatenate([b] + [l**0.5 * b for l, b in zip(lamda, bias)], axis=-2)
+        b_reg = xp.concatenate([b] + [l**0.5 * b for l, b in zip(lamda, bias)], axis=-1)
 
     return A_reg, b_reg
 
@@ -69,8 +69,8 @@ def build_extended_system(
 def build_extended_square_system(
     A: Linop,
     b: NDArray,
-    Rop: list[Linop],
     lamda: float | list[float],
+    Rop: list[Linop],
     bias: NDArray | list[NDArray],
 ) -> tuple[LinearOperator | NDArray, NDArray]:
     """
@@ -83,10 +83,10 @@ def build_extended_square_system(
         The main encoding operator.
     b : NDArray
         The vector of observed data.
-    Rop : list[Linop]
-        The regularization operators.
     lamda : float | list[float]
         The damping factors for each regularization operator.
+    Rop : list[Linop]
+        The regularization operators.
     bias : NDArray | list[NDArray]
         The bias terms for each regularization operator.
 
@@ -98,7 +98,7 @@ def build_extended_square_system(
         The extended right-hand side vector.
 
     """
-    A, b, Rop, lamda, bias = _preprocess_system(A, b, Rop, lamda, bias)
+    A, b, lamda, Rop, bias = _preprocess_system(A, b, lamda, Rop, bias)
     AHb = A.H(b)  # initialize right-hand vector
 
     # Create the stacked normal linear operator
@@ -117,7 +117,7 @@ def build_extended_square_system(
     return AHA_reg, AHb_reg
 
 
-def _preprocess_system(A, b, Rop, lamda, bias):
+def _preprocess_system(A, b, lamda, Rop, bias):
     device = get_device(b)
     xp = device.xp
 
@@ -161,23 +161,31 @@ def _preprocess_system(A, b, Rop, lamda, bias):
             bias = [bias]
     if bias is None:
         with device:
-            bias = [xp.zeros(R.ishape, dtype=b.dtype) for R in Rop]
+            bias = [xp.zeros(n, dtype=b.dtype) for R in Rop]
     elif len(bias) != len(Rop):
         raise ValueError(
             f"Mismatch between number of regularizers ({len(Rop)}) and number of biases ({len(bias)})"
         )
+    if dense:
+        bias = [b[None, ...] if b.ndim == 1 else b for b in bias]
+        bias = [
+            xp.repeat(b, batch_size, axis=0) if b.shape[0] == 1 else b for b in bias
+        ]
 
     # Remove regularizers, damping factors, and biases where damping is zero
-    filtered_data = [(R, l, b) for R, l, b in zip(Rop, lamda, bias) if l != 0.0]
+    filtered_data = [(l, R, b) for l, R, b in zip(lamda, Rop, bias) if l != 0.0]
     if filtered_data:
-        Rop, lamda, bias = zip(*filtered_data)  # Unpack back into attributes
+        lamda, Rop, bias = zip(*filtered_data)  # Unpack back into attributes
     else:
-        Rop, lamda, bias = [], [], []
+        lamda, Rop, bias = [], [], []
 
     # Precompute Rop_r.H(bias_r) for each r
     if A.__class__.__bases__[0].__name__ == "Linop":
         bias = [R.H(b) for R, b in zip(Rop, bias)]
     else:
-        bias = [R.conj().T @ b for R, b in zip(Rop, bias)]
+        bias = [
+            xp.einsum("bij,bj->bi", R.conj().swapaxes(-1, -2), b)
+            for R, b in zip(Rop, bias)
+        ]
 
-    return A, b, Rop, lamda, bias
+    return A, b, lamda, Rop, bias

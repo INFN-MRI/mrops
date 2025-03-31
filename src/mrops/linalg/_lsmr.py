@@ -185,7 +185,7 @@ class _LSMR(Alg):
         verbose: bool = False,
         record_time: bool = False,
     ):
-        A_reg, b_reg = build_extended_system(A, b, R, damp, bias)
+        A_reg, b_reg = build_extended_system(A, b, damp, R, bias)
         self.ishape = A.ishape
         self.oshape = A.oshape
         self.A = A_reg

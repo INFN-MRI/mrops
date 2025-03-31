@@ -32,6 +32,14 @@ def simple_system():
 
 
 @pytest.fixture
+def matrix_system():
+    """Fixture providing a simple linear system for testing."""
+    A = np.array([[4, 1], [1, 3]], dtype=complex)
+    x = np.array([1, 2], dtype=complex)
+    return A, A @ x, x
+
+
+@pytest.fixture
 def damp():
     return 0.001
 
@@ -40,6 +48,12 @@ def damp():
 def regularizer():
     R_matrix = np.array([[1, 0], [0, 2]], dtype=complex)  # Diagonal regularizer
     return MockLinearOperator(R_matrix)
+
+
+@pytest.fixture
+def matrix_reg():
+    R_matrix = np.array([[1, 0], [0, 2]], dtype=complex)  # Diagonal regularizer
+    return R_matrix
 
 
 @pytest.fixture

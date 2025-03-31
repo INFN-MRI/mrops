@@ -152,13 +152,13 @@ class _LSTSQ(Alg):
         self,
         A: NDArray[complex | float],
         b: NDArray[complex | float],
-        R: NDArray[complex | float] | list[NDArray[complex | float]] | None = None,
         damp: float | list[float] | tuple[float] | None = None,
+        R: NDArray[complex | float] | list[NDArray[complex | float]] | None = None,
         bias: NDArray[complex | float] | None = None,
         verbose: bool = False,
         record_time: bool = False,
     ):
-        A_reg, b_reg = build_extended_system(A, b, R, damp, bias)
+        A_reg, b_reg = build_extended_system(A, b, damp, R, bias)
         self.A = A_reg
         self.b = b_reg
         self._finished = False

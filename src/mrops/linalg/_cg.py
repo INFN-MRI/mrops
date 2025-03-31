@@ -214,7 +214,7 @@ class _ConjugateGradient(Alg):
         record_time: bool = False,
         solution: NDArray[complex] | None = None,
     ):
-        A_reg, b_reg = build_extended_square_system(A, b, R, damp, bias)
+        A_reg, b_reg = build_extended_square_system(A, b, damp, R, bias)
         self.ishape = A.ishape
         self.oshape = A.oshape
         self.A = A_reg
