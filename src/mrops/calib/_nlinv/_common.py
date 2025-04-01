@@ -7,7 +7,7 @@ from mrinufft._array_compat import get_array_module
 from ..._sigpy import linop, Device
 
 from ...base import NonLinop
-from ..gadgets import MulticoilOp
+from ...gadgets import MulticoilOp
 
 from ._nlinv_reg import SobolevOp
 

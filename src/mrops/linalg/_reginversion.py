@@ -57,16 +57,32 @@ def build_extended_system(
         A, Rop = aslinearoperator(A, b), [
             aslinearoperator(R, b) for R, b in zip(Rop, bias)
         ]
-        A_reg = StackedLinearOperator(A, Rop, lamda)
+        if len(Rop):
+            A_reg = StackedLinearOperator(A, Rop, lamda)
+        else:
+            A_reg = A
 
         # Extend the right-hand side vector with biases
-        b_reg = xp.concatenate(
-            [b.ravel()] + [l**0.5 * b.ravel() for l, b in zip(lamda, bias)]
-        )
+        if len(bias):
+            b_reg = xp.concatenate(
+                [b.ravel()] + [l**0.5 * b.ravel() for l, b in zip(lamda, bias)]
+            )
+        else:
+            b_reg = b
     else:
         A, b, lamda, Rop, bias = _preprocess_dense_system(A, b, lamda, Rop, bias)
-        A_reg = xp.concatenate([A] + [l**0.5 * R for l, R in zip(lamda, Rop)], axis=-2)
-        b_reg = xp.concatenate([b] + [l**0.5 * b for l, b in zip(lamda, bias)], axis=1)
+        if len(Rop):
+            A_reg = xp.concatenate(
+                [A] + [l**0.5 * R for l, R in zip(lamda, Rop)], axis=-2
+            )
+        else:
+            A_reg = A
+        if len(bias):
+            b_reg = xp.concatenate(
+                [b] + [l**0.5 * b for l, b in zip(lamda, bias)], axis=1
+            )
+        else:
+            b_reg = b
 
     return A_reg, b_reg
 
@@ -108,7 +124,7 @@ def build_extended_square_system(
     xp = get_array_module(b)
     if A.__class__.__bases__[0].__name__ == "Linop":
         A, b, lamda, Rop, bias = _preprocess_sparse_system(A, b, lamda, Rop, bias)
-        AHb = A.H(b)  # initialize right-hand vector
+        AHb = A.H.apply(b)  # initialize right-hand vector
 
         # Create the stacked normal linear operator
         AHA_reg = A.N
@@ -117,9 +133,10 @@ def build_extended_square_system(
         AHA_reg = aslinearoperator(AHA_reg, b)
 
         # Extend the right-hand side vector with biases
-        AHb_reg = AHb.ravel()
+        AHb_reg = AHb
         for l, b in zip(lamda, bias):
             AHb_reg += l * b
+        AHb_reg = AHb_reg.ravel()
     else:
         A, b, lamda, Rop, bias = _preprocess_dense_system(A, b, lamda, Rop, bias)
         AHb = (
@@ -258,6 +275,6 @@ def _preprocess_sparse_system(A, b, lamda, Rop, bias):
         lamda, Rop, bias = [], [], []
 
     # Precompute Rop_r.H(bias_r) for each r
-    bias = [R.H(b) for R, b in zip(Rop, bias)]
+    bias = [R.H.apply(b) for R, b in zip(Rop, bias)]
 
     return A, b, lamda, Rop, bias

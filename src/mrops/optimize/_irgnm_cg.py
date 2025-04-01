@@ -110,12 +110,14 @@ class _IrgnmCG(IrgnmBase):
         DGn = self.A.jacobian()
 
         # Setup rhs (right hand side)
-        b = DGn.H.apply(self.b - Gn.apply(self.x[0])) + self.alpha_n * (
-            self.x0 - self.x
-        )
+        # b = DGn.H.apply(self.b - Gn.apply(self.x[0])) + self.alpha_n * (
+        #     self.x0 - self.x
+        # )
+        b = self.b - Gn.apply(self.x[0])
+        bias = self.x0 - self.x
 
         # Setup Operator
-        A = DGn.N + self.alpha_n * Identity(DGn.H.oshape)
+        A = DGn  # .N + self.alpha_n * Identity(DGn.H.oshape)
 
         # Initialize CG variables
         device = get_device(self.x)
@@ -126,7 +128,13 @@ class _IrgnmCG(IrgnmBase):
             dx0 = device.xp.zeros_like(self.x)
 
         self.solver = ConjugateGradient(
-            A, b, dx0, max_iter=self.cg_iter, tol=self.cg_tol
+            A,
+            b,
+            damp=self.alpha_n,
+            bias=bias,
+            x=dx0,
+            max_iter=self.cg_iter,
+            tol=self.cg_tol,
         )
 
     def run_solver(self):  # noqa

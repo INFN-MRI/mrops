@@ -19,6 +19,8 @@ from ...optimize import IrgnmCG
 
 from .._acr import extract_acr
 
+from ._nlinv_op import CartesianNlinvOp, NonCartesianNlinvOp
+
 
 @with_numpy_cupy
 def nlinv_calib(
