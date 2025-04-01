@@ -1,39 +1,34 @@
-"""Porting of original MATLAB implementation of NLINV."""
+"""NLINV coil sensitivity map estimation."""
 
 __all__ = ["nlinv_calib"]
 
 import math
 import numpy as np
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from mrinufft._array_compat import with_numpy_cupy
 from mrinufft._array_compat import get_array_module
 
-from ..base import NonLinop
+from ..._sigpy import estimate_shape
+from ..._sigpy import get_device
+from ..._sigpy import resize
 
-from .._sigpy import get_device, resize
-from .._sigpy import linop
-from .._sigpy import estimate_shape
-from .._linop import CartesianMR, NonCartesianMR
+from ...base import fft, ifft
+from ...optimize import IrgnmCG
 
-from ..base._fftc import fft, ifft
-from ..base import IFFT
-from ..gadgets import MulticoilOp
-from ..linalg import IrgnmCG
-
-from ._acr import extract_acr
+from .._acr import extract_acr
 
 
 @with_numpy_cupy
 def nlinv_calib(
-    y: ArrayLike,
+    y: NDArray[complex],
     cal_width: int | None = None,
     ndim: int | None = None,
-    mask: ArrayLike | None = None,
-    shape: ArrayLike | None = None,
-    coords: ArrayLike | None = None,
-    weights: ArrayLike | None = None,
+    mask: NDArray[bool] | None = None,
+    shape: list[int] | tuple[int] | None = None,
+    coords: NDArray[float] | None = None,
+    weights: NDArray[float] | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-3,
     sobolev_width: int = 200,
@@ -48,30 +43,30 @@ def nlinv_calib(
     leave_pbar: bool = True,
     record_time: bool = False,
     ret_image: bool = False,
-) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
+) -> tuple[NDArray[complex], NDArray[complex], NDArray[complex]]:
     """
     Estimate coil sensitivity maps using NLINV.
 
     Parameters
     ----------
-    y : ArrayLike
+    y : NDArray[complex]
         Measured k-space data of shape ``(n_coils, ...)``
     cal_width : int
         Size of k-space calibration shape, assuming isotropic matrix.
     ndim : int, optional
         Acquisition dimensionality (2D or 3D). Used for Cartesian only.
-    mask : ArrayLike, optional
+    mask : NDArray[bool], optional
         Cartesian sampling pattern of the same shape as k-space matrix.
         Used for Cartesian only. If Cartesian and not provided, estimate
         from data (non-zero samples).
-    shape : ArrayLike[int], optional
+    shape : list[int] | tuple[int], optional
         Image dimensions (e.g., ``(nz, ny, nx)`` for 3D or ``(ny, nx)`` for 2D).
         Used for Non Cartesian only.
-    coords : ArrayLike, optional
+    coords : NDArray[float], optional
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT
         (``None`` for Cartesian).
-    weights : ArrayLike, optional
+    weights : NDArray[float], optional
         Fourier domain density compensation array for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation.
     oversamp : float, optional
@@ -108,12 +103,14 @@ def nlinv_calib(
 
     Returns
     -------
-    smaps : ArrayLike
-        Coil sensitivity maps of shape ``(n_coils, *shape)``
-    acr : ArrayLike
-        Autocalibration k-space region of shape ``(n_coils, *cal_shape)``
-    image : ArrayLike, optional
-        Reconstructed magnetization of shape ``(*shape)``
+    smaps : NDArray[complex]
+        Coil sensitivity maps of shape ``(n_coils, *shape)``.
+    acr : NDArray[complex]
+        Autocalibration k-space region of shape ``(n_coils, *cal_shape)``.
+    image : NDArray[complex], optional
+        Reconstructed magnetization of shape ``(*shape)``. Only returned
+        if ``ret_image == True``
+
 
     """
     xp = get_array_module(y)
@@ -180,6 +177,7 @@ def nlinv_calib(
     )
 
 
+# %% utils
 def _setup_cartesian(y, ndim, mask, cal_width, sobolev_width, sobolev_deg):  # noqa
     """Setup for Cartesian acquisition."""
     xp = get_array_module(y)
@@ -334,206 +332,3 @@ def _postprocess_output(
     if ret_image:
         return smaps, grappa_train, rho
     return smaps, grappa_train
-
-
-# %% util
-def kspace_filter(shape, kw, ell, device):
-    xp = device.xp
-    with device:
-        kgrid = xp.meshgrid(
-            *[xp.arange(-n // 2, n // 2, dtype=xp.float32) for n in shape],
-            indexing="ij",
-        )
-    k_norm = sum(ki**2 for ki in kgrid)
-    weights = 1.0 / (1 + kw * k_norm) ** (ell / 2)
-    return weights.astype(xp.float32)
-
-
-class BaseNlinvOp(NonLinop):
-    def __init__(
-        self,
-        device: str,
-        n_coils: int,
-        matrix_size: ArrayLike,
-        kw: int = 220.0,
-        ell: int = 32,
-    ):
-        self.device = device
-        self.n_coils = n_coils
-        self.matrix_size = matrix_size
-
-        # Compute the k-space weighting operator W
-        self._W = self._get_weighting_op(kw, ell)
-
-        super().__init__()
-
-    def W(self, input):
-        output = input.copy()
-        for s in range(1, input.shape[0]):
-            output[s] = self._W.apply(input[s])
-
-        return output
-
-    def _get_weighting_op(self, kw, ell):
-        try:
-            shape = tuple(self.matrix_size.tolist())
-        except Exception:
-            shape = tuple(self.matrix_size)
-        weights = kspace_filter(self.matrix_size, kw, ell, self.device)
-
-        # Build operators
-        FH = IFFT(shape, axes=tuple(range(-len(shape), 0)))
-        W = linop.Multiply(shape, weights)
-        return FH * W
-
-    def _compute_forward(self, xhat):
-        """Create forward model operator."""
-        x = self.W(xhat)
-        smaps = x[1:]
-        return MulticoilOp(self._PF, smaps)
-
-    def _compute_jacobian(self, xhat):
-        """Compute derivative of forward operator."""
-        return _NlinvJacobian(self.matrix_size, self._W, self._PF, self.W(xhat))
-
-
-class CartesianNlinvOp(BaseNlinvOp):
-    def __init__(
-        self,
-        device: str,
-        n_coils: int,
-        mask: ArrayLike,
-        kw: int = 220.0,
-        ell: int = 32,
-    ):
-        matrix_size = mask.shape
-        super().__init__(device, n_coils, matrix_size, kw, ell)
-        self._PF = self._get_fourier_op(mask)
-
-    def _get_fourier_op(self, mask):
-        try:
-            shape = tuple(self.matrix_size.tolist())
-        except Exception:
-            shape = tuple(self.matrix_size)
-        n_dims = len(shape)
-        ft_axes = tuple(range(-n_dims, 0))
-
-        return CartesianMR(shape, mask, ft_axes)
-
-
-class NonCartesianNlinvOp(BaseNlinvOp):
-    def __init__(
-        self,
-        device: str,
-        n_coils: int,
-        matrix_size: ArrayLike,
-        coords: ArrayLike | None = None,
-        weights: ArrayLike | None = None,
-        oversamp: float = 1.25,
-        eps: float = 1e-3,
-        kw: int = 220.0,
-        ell: int = 32,
-    ):
-        super().__init__(device, n_coils, matrix_size, kw, ell)
-        self._PF = self._get_fourier_op(coords, weights, oversamp, eps)
-
-    def _get_fourier_op(self, coords, weights, oversamp, eps):
-        try:
-            shape = tuple(self.matrix_size.tolist())
-        except Exception:
-            shape = tuple(self.matrix_size)
-
-        return NonCartesianMR(shape, coords, weights, True, oversamp, eps)
-
-
-class _NlinvJacobian(linop.Linop):
-    def __init__(self, matrix_size, W, PF, x):
-        """Compute derivative of forward operator."""
-        try:
-            shape = tuple(matrix_size.tolist())
-        except Exception:
-            shape = tuple(matrix_size)
-
-        # Split input
-        rho = x[0]
-        smaps = x[1:]
-        n_coils = smaps.shape[0]
-
-        # Compute current derivative operator
-        # PF * (M * dC_n + dM * C_n for n in range(self.n_coils+1))
-        unsqueeze = linop.Reshape([1] + PF.oshape, PF.oshape)
-        DF_n = []
-        for n in range(n_coils):
-            DF_n.append(
-                unsqueeze
-                * PF
-                * (
-                    linop.Multiply(shape, rho)
-                    * W
-                    * linop.Slice((n_coils + 1,) + tuple(shape), n + 1)
-                    + linop.Multiply(shape, smaps[n])
-                    * linop.Slice((n_coils + 1,) + tuple(shape), 0)
-                )
-            )
-
-        _linop = linop.Vstack(DF_n, axis=0)
-
-        super().__init__(_linop.oshape, _linop.ishape)
-        self._linop = _linop
-        self._normal = _NlinvNormal(_linop.ishape, W, PF, x)
-
-    def _apply(self, input):
-        return self._linop._apply(input)
-
-    def _normal_linop(self):
-        return self._normal
-
-    def _adjoint_linop(self):
-        return self._linop.H
-
-
-class _NlinvNormal(linop.Linop):
-    def __init__(self, shape, W, PF, x):
-        rho = x[0]
-        smaps = x[1:]
-
-        # build
-        self._W = W
-        self.FHF = PF.N
-        self.rho = rho
-        self.smaps = smaps
-        super().__init__(shape, shape)
-
-    def _apply(self, dxhat):
-        xp = get_array_module(dxhat)
-        dx = self.W(dxhat)
-
-        # Split
-        drho_in = dx[0]
-        dsmaps_in = dx[1:]
-
-        # Pre-process Fourier Normal operator input
-        _tmp = dsmaps_in * self.rho + self.smaps * drho_in
-
-        # Apply Fourier Normal operator
-        _tmp = xp.stack([self.FHF.apply(_el) for _el in _tmp])
-
-        # Post-process Fourier Normal operator output
-        drho_out = (self.smaps.conj() * _tmp).sum(axis=0)[None, ...]
-        dsmaps_out = self.rho.conj() * _tmp
-
-        return self.Wadjoint(xp.concatenate((drho_out, dsmaps_out), axis=0))
-
-    def W(self, input):
-        output = input.copy()
-        for s in range(1, input.shape[0]):
-            output[s] = self._W.apply(input[s])
-
-        return output
-
-    def Wadjoint(self, input):
-        output = input.copy()
-        for s in range(1, input.shape[0]):
-            output[s] = self._W.H.apply(input[s])
-
-        return output

@@ -4,7 +4,7 @@ __all__ = ["NUFFT", "NUFFTAdjoint"]
 
 from types import SimpleNamespace
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from .._sigpy.linop import Linop
 
@@ -17,10 +17,9 @@ class NUFFT(Linop):
 
     Parameters
     ----------
-    ishape : ArrayLike[int] | None, optional
-        Input shape. Use ``-1`` to enable broadcasting
-        across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    coords : ArrayLike
+    ishape : list[int] | tuple[int]
+        Input shape.
+    coords : NDArray[float]
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT.
     oversamp : float, optional
@@ -36,8 +35,8 @@ class NUFFT(Linop):
 
     def __init__(
         self,
-        ishape: ArrayLike,
-        coords: ArrayLike,
+        ishape: list[int] | tuple[int],
+        coords: NDArray[float],
         oversamp: float = 1.25,
         eps: float = 1e-3,
         plan: SimpleNamespace | None = None,
@@ -82,10 +81,9 @@ class NUFFTAdjoint(Linop):
 
     Parameters
     ----------
-    oshape : ArrayLike[int] | None, optional
-        Output shape. Use ``-1`` to enable broadcasting
-        across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    coords : ArrayLike
+    oshape : list[int] | tuple[int]
+        Output shape.
+    coords : NDArray[float]
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT..
     oversamp : float, optional
@@ -101,8 +99,8 @@ class NUFFTAdjoint(Linop):
 
     def __init__(
         self,
-        oshape: ArrayLike,
-        coords: ArrayLike,
+        oshape: list[int] | tuple[int],
+        coords: NDArray[float],
         oversamp: float = 1.25,
         eps: float = 1e-3,
         plan: SimpleNamespace | None = None,

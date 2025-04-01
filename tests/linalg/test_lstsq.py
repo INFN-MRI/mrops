@@ -31,8 +31,8 @@ def test_lstsq_with_bias(matrix_system, damp, bias):
     A, b, x0 = matrix_system
     x = lstsq(A, b, damp=damp, bias=bias)
     np.testing.assert_allclose(x, x0, atol=1e-2)
-    
-    
+
+
 def test_lstsq_with_constraints():
     """Test equality-constrained least squares solver."""
     # Define a small least squares problem

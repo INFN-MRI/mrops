@@ -8,7 +8,7 @@ import math
 from types import SimpleNamespace
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 import mrinufft
 
@@ -23,24 +23,24 @@ if mrinufft.check_backend("cufinufft"):
 
 
 def nufft(
-    input: ArrayLike,
-    coords: ArrayLike,
+    input: NDArray[complex],
+    coords: NDArray[float],
     oversamp: float = 1.25,
     eps: float = 1e-3,
     normalize_coords: bool = True,
-) -> ArrayLike:
+) -> NDArray[complex]:
     """
     Non-uniform Fast Fourier Transform.
 
     Parameters
     ----------
-    input : ArrayLike
+    input : NDArray[complex]
         Input signal domain array of shape
         ``(..., n_{ndim - 1}, ..., n_1, n_0)``,
         where ``ndim`` is specified by ``coord.shape[-1]``. The nufft
         is applied on the last ``ndim axes``, and looped over
         the remaining axes.
-    coords : ArrayLike
+    coords : NDArray[float]
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT.
     oversamp : float, optional
@@ -54,7 +54,7 @@ def nufft(
 
     Returns
     -------
-    ArrayLike
+    NDArray[complex]
         Fourier domain data of shape
         ``input.shape[:-ndim] + coords.shape[:-1]``.
 
@@ -67,13 +67,13 @@ def nufft(
 
 
 def nufft_adjoint(
-    input: ArrayLike,
-    coords: ArrayLike,
-    oshape: ArrayLike | None = None,
+    input: NDArray[complex],
+    coords: NDArray[float],
+    oshape: list[int] | tuple[int] | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-3,
     normalize_coords: bool = True,
-) -> ArrayLike:
+) -> NDArray[complex]:
     """
     Adjoint non-uniform Fast Fourier Transform.
 
@@ -85,10 +85,10 @@ def nufft_adjoint(
         where ``ndim`` is specified by ``coord.shape[-1]``. The nufft
         is applied on the last ``ndim axes``, and looped over
         the remaining axes.
-    coord : ArrayLike
+    coord : NDArray[float]
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT.
-    oshape : ArrayLike[int] | None, optional
+    oshape : list[int] | tuple[int] | None, optional
         Output shape of the form ``(..., n_{ndim - 1}, ..., n_1, n_0)``.
         The default is ``None`` (estimated from ``coord``).
     oversamp : float, optional
@@ -102,7 +102,7 @@ def nufft_adjoint(
 
     Returns
     -------
-    ArrayLike
+    NDArray[complex]
         Signal domain data of shape
         ``input.shape[:-ndim] + coords.shape[:-1]``.
 
@@ -116,8 +116,8 @@ def nufft_adjoint(
 # %% local subroutines
 @with_numpy_cupy
 def __nufft_init__(
-    coords: ArrayLike,
-    shape: ArrayLike | None = None,
+    coords: NDArray[float],
+    shape: list[int] | tuple[int] | None = None,
     oversamp: float = 1.25,
     eps: float = 1e-6,
     normalize_coords: bool = True,

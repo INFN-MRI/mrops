@@ -2,7 +2,7 @@
 
 __all__ = ["NonCartesianMR"]
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from .._sigpy import linop
 from .._sigpy.linop import Multiply
@@ -18,12 +18,12 @@ class NonCartesianMR(linop.Linop):
 
     Parameters
     ----------
-    ishape : ArrayLike[int] | None, optional
+    ishape : list[int] | tuple[int] | None, optional
         Input shape ``(ny, nx)`` (2D) or ``(nz, ny, nx)`` (3D).
-    coords : ArrayLike
+    coords : NDArray[float]
         Fourier domain coordinate array of shape ``(..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT.
-    weights : ArrayLike | None, optional
+    weights : NDArray[float] | None, optional
         Fourier domain density compensation array for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation. If provided,
         must be shaped ``coords.shape[:-1]``.
@@ -43,9 +43,9 @@ class NonCartesianMR(linop.Linop):
 
     def __init__(
         self,
-        ishape: ArrayLike,
-        coords: ArrayLike,
-        weights: ArrayLike | None = None,
+        ishape: list[int] | tuple[int],
+        coords: NDArray[float],
+        weights: NDArray[float] | None = None,
         toeplitz: bool | None = None,
         oversamp: float = 1.25,
         eps: float = 1e-3,

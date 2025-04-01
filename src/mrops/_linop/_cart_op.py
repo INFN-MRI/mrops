@@ -4,7 +4,7 @@ __all__ = ["CartesianMR"]
 
 import numpy as np
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from .._sigpy import linop
 from .._sigpy.linop import Multiply
@@ -18,14 +18,14 @@ class CartesianMR(linop.Linop):
 
     Parameters
     ----------
-    shape : ArrayLike[int]
+    shape : list[int] | tuple[int]
         Input shape ``(ny, nx)`` (2D)
         or ``(nz, ny, nx)`` (3D).
-    mask : ArrayLike[int] | None, optional
+    mask : NDArray[bool] | None, optional
         Sampling mask for undersampled imaging.
         Must be shaped ``(ny, nx | 1)`` (2D)
         or ``(nz, ny, nx | 1)`` (2D).
-    axes : ArrayLike[int] | None, optional
+    axes : list[int] | tuple[int] | None, optional
         Axes over which to compute the FFT.
         The default is ``None`` (all spatial axes).
     center : bool, optional
@@ -35,9 +35,9 @@ class CartesianMR(linop.Linop):
 
     def __init__(
         self,
-        shape: ArrayLike,
-        mask: ArrayLike | None = None,
-        axes: ArrayLike | None = None,
+        shape: list[int] | tuple[int],
+        mask: NDArray[bool] | None = None,
+        axes: list[int] | tuple[int] | None = None,
         center: bool = True,
     ):
         if len(shape) != 2 and len(shape) != 3:

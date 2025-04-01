@@ -4,7 +4,8 @@ __all__ = ["fft", "ifft"]
 
 from math import ceil
 
-from numpy.typing import ArrayLike
+import numpy as np
+from numpy.typing import NDArray
 
 import torch
 
@@ -15,22 +16,22 @@ from .._sigpy import util
 
 @with_torch
 def fft(
-    input: ArrayLike,
-    oshape: ArrayLike | None = None,
-    axes: ArrayLike | None = None,
+    input: NDArray[complex],
+    oshape: list[int] | tuple[int] | None = None,
+    axes: int | list[int] | tuple[int] | None = None,
     center: bool = True,
     norm: str | None = "ortho",
-) -> ArrayLike:
+) -> NDArray[complex]:
     """
     FFT function that supports centering.
 
     Parameters
     ----------
-    input : ArrayLike
+    input : NDArray[complex]
         Input array.
-    oshape : ArrayLike[int] | None, optional
+    oshape : list[int] | tuple[int] | None, optional
         Output shape. The default is ``None`` (same as ``input``).
-    axes :  ArrayLike[int] | None, optional
+    axes :  int | list[int] | tuple[int] | None, optional
         Axes over which to compute the FFT.
         The default is ``None`` (all axes).
     center : bool, optional
@@ -41,10 +42,12 @@ def fft(
 
     Returns
     -------
-    array : ArrayLike
+    NDArray[complex]
         FFT result of dimension ``oshape``.
 
     """
+    if axes is not None and np.isscalar(axes):
+        axes = (axes,)
     if not torch.is_complex(input):
         input = input.to(torch.complex64)
 
@@ -61,22 +64,22 @@ def fft(
 
 @with_torch
 def ifft(
-    input: ArrayLike,
-    oshape: ArrayLike | None = None,
-    axes: ArrayLike | None = None,
+    input: NDArray[complex],
+    oshape: list[int] | tuple[int] | None = None,
+    axes: int | list[int] | tuple[int] | None = None,
     center: bool = True,
     norm: str | None = "ortho",
-) -> ArrayLike:
+) -> NDArray[complex]:
     """
     IFFT function that supports centering.
 
     Parameters
     ----------
-    input : ArrayLike
+    input : NDArray[complex]
         Input array.
-    oshape : ArrayLike[int] | None, optional
+    oshape : list[int] | tuple[int] | None, optional
         Output shape. The default is ``None`` (same as ``input``).
-    axes :  ArrayLike[int] | None, optional
+    axes :  int | list[int] | tuple[int] | None, optional
         Axes over which to compute the FFT.
         The default is ``None`` (all axes).
     center : bool, optional
@@ -87,10 +90,12 @@ def ifft(
 
     Returns
     -------
-    array : ArrayLike
+    NDArray[complex]
         iFFT result of dimension ``oshape``.
 
     """
+    if axes is not None and np.isscalar(axes):
+        axes = (axes,)
     if not torch.is_complex(input):
         input = input.to(torch.complex64)
 

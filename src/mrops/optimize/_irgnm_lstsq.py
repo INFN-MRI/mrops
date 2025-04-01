@@ -1,6 +1,6 @@
-"""Iteratively Renormalized Gauss Newton Method with Conjugate Gradient solver."""
+"""Iteratively Renormalized Gauss Newton Method with Least Squares solver."""
 
-__all__ = ["IrgnmCG"]
+__all__ = ["IrgnmLstsq"]
 
 import gc
 
@@ -16,13 +16,13 @@ from .._sigpy.app import App
 from .._sigpy.linop import Identity
 
 from ..base import NonLinop
-from ._cg import ConjugateGradient
+from ..linalg import ConjugateGradient
 from ._irgnm import IrgnmBase
 
 
-class IrgnmCG(App):
+class IrgnmLstsq(App):
     """
-    Conjugate Gradient Iteratively Regularized Gauss-Newton Method (IRGNM) algorithm.
+    Least Squares Iteratively Regularized Gauss-Newton Method (IRGNM) algorithm.
 
     This class accepts any nonlinear operator (implementing the NonlinearOperator
     interface) along with custom initialization and postprocessing routines.
@@ -31,7 +31,7 @@ class IrgnmCG(App):
 
         [F'(x)^H F'(x) + α I] dx = F'(x)^H (y - F(x)) + α (x0 - x),
 
-    using Conjugate Gradient algorithm, and then updates x ← x + dx.
+    using Least Squares algorithm, and then updates x ← x + dx.
     Here α is a regularization parameter that decays over outer iterations.
 
     Parameters
@@ -44,10 +44,6 @@ class IrgnmCG(App):
         Variable.
     max_iter : int, optional
         Number of outer (Gauss-Newton) iterations (default is ``10``).
-    cg_iter : int, optional
-        Number of inner (Conjugate Gradient) iterations (default is ``10``).
-    cg_tol : float, optional
-         Tolerance for Conjugate Gradient stopping condition (default is ``0.0``).
     alpha0 : float, optional
         Initial regularization parameter (default is ``1.0``).
     alpha_min : float, optional
@@ -69,8 +65,6 @@ class IrgnmCG(App):
         b: ArrayLike,
         x: ArrayLike,
         max_iter: int = 10,
-        cg_iter: int = 20,
-        cg_tol: float = 1e-2,
         alpha0: float = 1.0,
         alpha_min: float = 0.0,
         q: float = 2 / 3,
@@ -78,7 +72,7 @@ class IrgnmCG(App):
         leave_pbar: bool = True,
         record_time: bool = False,
     ):
-        _alg = _IrgnmCG(A, b, x, max_iter, cg_iter, cg_tol, alpha0, alpha_min, q)
+        _alg = _IrgnmLstsq(A, b, x, max_iter, alpha0, alpha_min, q)
         super().__init__(_alg, show_pbar, leave_pbar, record_time)
 
     def _output(self):
@@ -88,22 +82,18 @@ class IrgnmCG(App):
         return self.alg.x
 
 
-class _IrgnmCG(IrgnmBase):
+class _IrgnmLstsq(IrgnmBase):
     def __init__(
         self,
         A: NonLinop,
         b: ArrayLike,
         x: ArrayLike,
         max_iter: int = 10,
-        cg_iter: int = 20,
-        cg_tol: float = 1e-2,
         alpha0: float = 1.0,
         alpha_min: float = 0.0,
         q: float = 2 / 3,
     ):
         super().__init__(A, b, x, max_iter, alpha0, alpha_min, q)
-        self.cg_iter = cg_iter
-        self.cg_tol = cg_tol
 
     def setup_solver(self):  # noqa
         Gn = self.A.forward()

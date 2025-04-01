@@ -2,8 +2,6 @@
 
 __all__ = ["FFT", "IFFT"]
 
-from numpy.typing import ArrayLike
-
 from .._sigpy.linop import Linop, Identity
 
 from ._fftc import fft, ifft
@@ -15,10 +13,9 @@ class FFT(Linop):
 
     Parameters
     ----------
-    shape : ArrayLike[int]
-        Input shape. Use ``-1`` to enable broadcasting
-        across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    axes :  ArrayLike[int] | None, optional
+    shape : list[int] | tuple[int]
+        Input shape.
+    axes : int | list[int] | tuple[int] | None, optional
         Axes over which to compute the FFT.
         The default is ``None`` (all axes).
     center : bool, optional
@@ -28,8 +25,8 @@ class FFT(Linop):
 
     def __init__(
         self,
-        shape: ArrayLike,
-        axes: ArrayLike | None = None,
+        shape: list[int] | tuple[int],
+        axes: int | list[int] | tuple[int] | None = None,
         center: bool = True,
     ):
         self.axes = axes
@@ -52,10 +49,9 @@ class IFFT(Linop):
 
     Parameters
     ----------
-    shape : ArrayLike[int]
-        Input shape. Use ``-1`` to enable broadcasting
-        across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    axes :  ArrayLike[int] | None, optional
+    shape : list[int] | tuple[int]
+        Input shape.
+    axes : int | list[int] | tuple[int] | None, optional
         Axes over which to compute the FFT.
         The default is ``None`` (all axes).
     center : bool, optional
@@ -65,8 +61,8 @@ class IFFT(Linop):
 
     def __init__(
         self,
-        shape: ArrayLike,
-        axes: ArrayLike | None = None,
+        shape: list[int] | tuple[int],
+        axes: int | list[int] | tuple[int] | None = None,
         center: bool = True,
     ):
         self.axes = axes
