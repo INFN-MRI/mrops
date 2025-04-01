@@ -1,85 +1,72 @@
-"""IDEAL algorithm for iterative fat-water separation with joint fieldmap estimation."""
-
-__all__ = ["ideal", "_FatWater"]
-
+"""IDEAL algorithm."""
 
 import numpy as np
-from numpy.typing import NDArray
+import scipy.ndimage
+import skimage.restoration
+import torch
+import torch.nn.functional as F
+from _ideal_op import IdealOp
+from _ideal_reg import IrgnmBase, LSTSQ
 
-from .._sigpy import get_device
-
-
-def ideal(): ...
-
-
-def _FatWater(te: NDArray[float], B0: float) -> NDArray[complex]:
-    """
-    Get Fat Water basis.
-
-    Parameters
-    ----------
-    te : NDArray[float]
-        Echo times in ``[s]``.
-    B0 : float
-        Field strength in ``[T]``.
-
-    Returns
-    -------
-    NDArray[complex]
-        Water-Fat basis at given field strength.
-
-    """
-    device = get_device(te)
-    xp = device.xp
-
-    # Fat-water matrix
-    ne = len(te)
-    te = te.reshape(ne, 1)
-
-    with device:
-        d = np.asarray(
-            [5.29, 5.19, 4.20, 2.75, 2.24, 2.02, 1.60, 1.30, 0.90], dtype=xp.float32
-        )
-        fat = xp.zeros_like(te, dtype=xp.complex64)
-        freq = xp.zeros(len(d), dtype=xp.float32)
-
-    # Number of double bond, water model
-    NDB, H2O = 2.5, 4.7
-
-    # Mark's heuristic formulas
-    CL = 16.8 + 0.25 * NDB
-    NDDB = 0.093 * NDB**2
-
-    # Gavin's formulas (number of protons per molecule)
-    awater = 2.0
-    ampl = np.zeros(len(d))
-    ampl[0] = NDB * 2
-    ampl[1] = 1
-    ampl[2] = 4
-    ampl[3] = NDDB * 2
-    ampl[4] = 6
-    ampl[5] = (NDB - NDDB) * 4
-    ampl[6] = 6
-    ampl[7] = (CL - 4) * 6 - NDB * 8 + NDDB * 2
-    ampl[8] = 9
-
-    # Scaling
-    awater = awater / 2
-    ampl = ampl / ampl.sum()
-
-    # Time evolution matrix
-    water = (te * 0.0 + awater).astype(fat.dtype)
-    larmor = 42.57747892 * B0  # Larmor frequency (MHz)
-
-    for j in range(len(d)):
-        freq[j] = larmor * (d[j] - H2O)  # relative to water
-        fat += ampl[j] * np.exp(2 * np.pi * 1j * freq[j] * te)
-
-    return xp.concatenate((water, fat), axis=-1)
+# ---------------------------
+# Unswap and Median Filtering Functions
+# ---------------------------
 
 
-class _FieldModel:
-    def __init__(self): ...
+def downsample_image(image, factor, mode="trilinear"):
+    tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0).float()
+    new_size = [int(dim / factor) for dim in tensor.shape[2:]]
+    down = F.interpolate(tensor, size=new_size, mode=mode, align_corners=False)
+    return down.squeeze().numpy()
 
 
-class PhaseModel: ...
+def upsample_image(image, factor, mode="trilinear"):
+    tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0).float()
+    new_size = [int(dim * factor) for dim in tensor.shape[2:]]
+    up = F.interpolate(tensor, size=new_size, mode=mode, align_corners=False)
+    return up.squeeze().numpy()
+
+
+def unswap(psi, downsample_factor=4):
+    B0 = np.real(psi).squeeze()
+    B0_ds = downsample_image(B0, factor=downsample_factor)
+    B0_unwrapped_ds = np.array(
+        [skimage.restoration.unwrap_phase(B0_ds[i]) for i in range(B0_ds.shape[0])]
+    )
+    B0_unwrapped = upsample_image(B0_unwrapped_ds, factor=downsample_factor)
+    psi_updated = B0_unwrapped[np.newaxis, ...] + 1j * np.imag(psi.squeeze())
+    return psi_updated
+
+
+def median_filter_image(image, size):
+    return scipy.ndimage.median_filter(image, size=size)
+
+
+# ---------------------------
+# Full IDEAL Algorithm
+# ---------------------------
+
+
+def ideal_algorithm(psi_init, te, data, A, **kwargs):
+    psi = psi_init.copy()
+
+    for iter in range(kwargs.get("maxit_outer", 10)):
+        print(f"Outer Iteration {iter+1}")
+
+        solver = IdealIRGNM(te, data, psi, A, **kwargs)
+        psi = solver.solve()
+
+        op = IdealOp(te, A, **kwargs)
+        residual = data - op._compute_forward(psi).asarray()
+        print("Residual norm:", np.linalg.norm(residual))
+
+        if iter < kwargs.get("maxit_outer", 10) - 1:
+            if kwargs.get("unwrap_flag", True):
+                psi = unswap(psi, kwargs.get("downsample_factor", 4))
+            if kwargs.get("smooth_field", True):
+                B0_filtered = median_filter_image(
+                    np.real(psi), size=kwargs.get("median_filter_size", (3, 3, 3))
+                )
+                psi = B0_filtered[np.newaxis, ...] + 1j * np.imag(psi.squeeze())
+
+    return psi
