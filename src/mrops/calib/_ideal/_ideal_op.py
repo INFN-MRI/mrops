@@ -1,9 +1,13 @@
+"""IDEAL Nonlinear Operator."""
+
+__all__ = ["IdealOp"]
+
 import numpy as np
-import sigpy as sp
-from scipy.fft import fftn, ifftn
+
+from ...base import NonLinop, fft, ifft
 
 
-class IDEAL_Operator(NonLinop):
+class IdealOp(NonLinop):
     """
     Nonlinear operator for IDEAL fat-water separation.
 
@@ -15,20 +19,16 @@ class IDEAL_Operator(NonLinop):
 
     Parameters
     ----------
-    te : np.ndarray
+    te : NDArray[float]
         Echo times (s), shape (ne,).
     field_strength : float
         MRI field strength (Tesla).
-    b : np.ndarray
-        Measured echo data. Shape can be (ne, nvoxels) or (ne, nx, ny, nz).
+    b : NDArray[complex]
+        Measured echo data. Shape can be (nvoxels, ne) or (nz, ny, nx, ne).
     filter_size : int, optional
         Size of the smoothing filter in k-space (default is 3).
-    nonnegFF : bool, optional
-        Enforce non-negativity on FF (default is False).
     smooth_phase : bool, optional
         If True, smooth the initial phase using k-space filtering (default is False).
-    noise : float, optional
-        Noise level (default is 1e-6).
 
     """
 
@@ -38,23 +38,25 @@ class IDEAL_Operator(NonLinop):
         field_strength,
         b,
         filter_size=3,
-        nonnegFF=False,
         smooth_phase=False,
-        noise=1e-6,
     ):
         super().__init__()
         self.te = np.asarray(te)  # shape (ne,)
         self.field_strength = field_strength
         self.filter_size = filter_size
-        self.nonnegFF = nonnegFF
         self.smooth_phase = smooth_phase
-        self.noise = noise
+
+        # Define the low-pass filter (3x3 ones)
+        filter_kernel = np.ones((3, 3))
+        self.filter_fft = fft(
+            filter_kernel, shape=b.shape[1:]
+        )  # Zero-padding filter to match p
 
         # b: if multidimensional, flatten spatial dims.
         if b.ndim > 2:
-            ne = b.shape[0]
-            self.spatial_shape = b.shape[1:]
-            self.b = b.reshape(ne, -1)  # shape (ne, nvoxels)
+            ne = b.shape[-1]
+            self.spatial_shape = b.shape[:-1]
+            self.b = b.reshape(-1, ne).T  # shape (ne, nvoxels)
         else:
             self.b = b
             self.spatial_shape = None
@@ -91,7 +93,7 @@ class IDEAL_Operator(NonLinop):
 
     def transform(self, R2):
         """
-        Simply returns B0 and R2* separately; if nonnegFF is enabled, R2 is rectified.
+        Simply returns B0 and R2* separately; Here R2* is rectified.
 
         Parameters
         ----------
@@ -100,14 +102,11 @@ class IDEAL_Operator(NonLinop):
 
         Returns
         -------
-        B0, R2, dR2 : tuple
+        R2, dR2 : tuple
             dR2 is a derivative adjustment (1 or sign(R2)) for nonnegativity.
         """
-        if self.nonnegFF:
-            R2 = np.abs(R2)
-            dR2 = np.sign(R2) + (R2 == 0)
-        else:
-            dR2 = 1
+        R2 = np.abs(R2)
+        dR2 = np.sign(R2) + (R2 == 0)
 
         return R2, dR2
 
@@ -125,28 +124,20 @@ class IDEAL_Operator(NonLinop):
         np.ndarray
             Smoothed array (flattened).
         """
-        if self.spatial_shape is None:
-            return p
-        p_img = p.reshape(self.spatial_shape)
+        # Compute FFT of both p and the filter, ensuring they have the same size
+        p_fft = np.fft.fft2(p)
 
-        # Create a box filter kernel of ones.
-        kernel = np.ones(self.spatial_shape)
+        # Perform element-wise multiplication in frequency domain
+        result_fft = p_fft * self.filter_fft
 
-        # For a simple low-pass effect, use a small cube in k-space.
-        # Here we simulate a 3x3x3 box filter in spatial domain by applying FFT, multiplying by a mask, and inverse FFT.
-        Pk = fftn(p_img)
-        H = np.zeros(self.spatial_shape)
-        center = tuple(s // 2 for s in self.spatial_shape)
-        slices = tuple(
-            slice(c - self.filter_size // 2, c + self.filter_size // 2 + 1)
-            for c in center
-        )
-        H[slices] = 1
-        H /= H.sum()
-        p_smoothed = np.real(ifftn(Pk * H))
-        return p_smoothed.ravel()
+        # Compute inverse FFT to obtain the convolved result
+        result = np.fft.ifft2(
+            result_fft
+        ).real  # Take real part to remove numerical artifacts
 
-    def update(self, B0, R2):
+        return result
+
+    def update(self, x_new):
         """
         Compute common terms for the forward model and Jacobian given B0 and R2*.
         B0 and R2 are 1D arrays of length nvoxels.
@@ -156,6 +147,9 @@ class IDEAL_Operator(NonLinop):
         np.ndarray
             x_out, the estimated water-fat amplitudes (2 x nvoxels).
         """
+        B0 = x_new[..., 0]
+        R2 = x_new[..., 1]
+
         self.B0 = B0
         self.R2, self.dR2 = self.transform(R2)
 
@@ -163,23 +157,23 @@ class IDEAL_Operator(NonLinop):
         self.W = np.exp(1j * self.te[:, None] * self.B0[None, :])
 
         # Compute WW = |W|^2, shape (ne, nvoxels)
-        WW = np.real(self.W) ** 2 + np.imag(self.W) ** 2
+        WW = (self.W.real) ** 2 + (self.W.imag) ** 2
 
         # Compute M1, M2, M3 as in MATLAB:
         # For each voxel, sum over echo times (elementwise multiplication then sum)
-        A0 = np.real(self.A[:, 0].conj() * self.A[:, 0])  # shape (ne,)
-        A1 = np.real(self.A[:, 0].conj() * self.A[:, 1])  # shape (ne,)
-        A2 = np.real(self.A[:, 1].conj() * self.A[:, 1])  # shape (ne,)
-        self.M1 = np.sum(A0[:, None] * WW, axis=0)  # shape (nvoxels,)
-        self.M2 = np.sum(A1[:, None] * WW, axis=0)
-        self.M3 = np.sum(A2[:, None] * WW, axis=0)
+        A0 = (self.A[:, 0].conj() * self.A[:, 0]).real  # shape (ne,)
+        A1 = (self.A[:, 0].conj() * self.A[:, 1]).real  # shape (ne,)
+        A2 = (self.A[:, 1].conj() * self.A[:, 1]).real  # shape (ne,)
+        self.M1 = (A0[:, None] * WW).sum(axis=0)  # shape (nvoxels,)
+        self.M2 = (A1[:, None] * WW).sum(axis=0)
+        self.M3 = (A2[:, None] * WW).sum(axis=0)
         self.dtm = self.M1 * self.M3 - self.M2**2  # shape (nvoxels,)
 
         # Compute z = inv(M) * A' * W' * b
         self.Wb = self.W.conj() * self.b  # shape (ne, nvoxels)
         z_tmp = self.A.conj().T @ self.Wb  # shape (2, nvoxels)
         z_tmp /= self.dtm  # broadcast division along rows
-        self.z = np.empty_like(z_tmp)
+        self.z = 0.0 * z_tmp
         self.z[0, :] = self.M3 * z_tmp[0, :] - self.M2 * z_tmp[1, :]
         self.z[1, :] = self.M1 * z_tmp[1, :] - self.M2 * z_tmp[0, :]
 
@@ -198,27 +192,26 @@ class IDEAL_Operator(NonLinop):
         self.phi = (
             np.angle(self.p) / 2
         )  # initial phase estimate (nvoxels,); -pi/2 < phi0 < pi/2
-        self.x_out = np.real(self.z * np.exp(-1j * self.phi))  # estimated amplitudes
+        self.x_out = (self.z * np.exp(-1j * self.phi)).real  # estimated amplitudes
 
         # Absorb sign of x into phi
         self.x_out = self.x_out * np.exp(1j * self.phi)
-        self.phi = np.angle(np.sum(self.x_out, axis=0))  # combine components
-        self.x_out = np.real(self.z * np.exp(-1j * self.phi))
+        self.phi = np.angle((self.x_out).sum(axis=0))  # combine components
+        self.x_out = (self.z * np.exp(-1j * self.phi)).real
 
         # box constraint (0<=FF<=1)
-        if self.nonnegFF:
-            self.x_out = np.maximum(self.x_out, 0)
-            self.WAx = self.W * (self.A @ self.x_out)  # shape (ne, nvoxels)
-            a = self.WAx @ self.b / max((self.WAx**2).sum(), np.finfo(float).eps)
-            self.x_out *= np.abs(a)
-            self.phi = np.angle(a)
-            if self.smooth_phase:
-                self.p = self.kspace_smoothing(self.p)
-                self.phi = np.angle(self.p)
+        self.x_out = np.maximum(self.x_out, 0)
+        self.WAx = self.W * (self.A @ self.x_out)  # shape (ne, nvoxels)
+        a = self.WAx @ self.b / max((self.WAx**2).sum(), np.finfo(float).eps)
+        self.x_out *= np.abs(a)
+        self.phi = np.angle(a)
+        if self.smooth_phase:
+            self.p = self.kspace_smoothing(self.p)
+            self.phi = np.angle(self.p)
 
-        return self.x_out
+        super().update(x_new)
 
-    def _compute_forward(self, B0, R2):
+    def _compute_forward(self, x_new):
         """
         Compute the forward model F(x) for given B0 and R2*.
 
@@ -230,43 +223,87 @@ class IDEAL_Operator(NonLinop):
         # Compute WAx = W * (A @ x_out)
         self.WAx = self.W * (self.A @ self.x_out)  # shape (ne, nvoxels)
         self.r = self.WAx * eiphi[None, :] - self.b  # shape (ne, nvoxels)
-        if self.spatial_shape is not None:
-            ne = self.te.shape[0]
-            self.r = self.r.reshape((ne,) + self.spatial_shape)
 
+        # prepare output
         return self.r
 
-    def _compute_jacobian(self, B0, R2):
+    def _compute_jacobian(self, x_new):
         """
         Compute the Jacobian of F(x) with respect to B0 and R2*.
 
         Returns:
             JB, JR : dense Jacobian matrices (placeholders).
         """
-        # Compute real part (B0) of the Jacobian (JB)
-        JB = 1j * self.te[:, None] * self.WAx
-        dphi = -np.real(self.q / self.p)
-        dphi[self.p == 0] = 0
-        JB += self.WAx * 1j * dphi
-        dx = self.y + self.z * dphi
-        dx = np.imag(dx / np.exp(1j * self.phi))
-        JB += self.W * (self.A @ dx)
-        JB *= np.exp(1j * self.phi)  # Apply phase
+        # Compute y
+        y = (self.A * self.te).T @ self.Wb / self.dtm
+        y = np.vstack(
+            [
+                self.M3 * y[0, :] - self.M2 * y[1, :],
+                self.M1 * y[1, :] - self.M2 * y[0, :],
+            ]
+        )
 
-        # Compute imaginary part (R2*) of the Jacobian (JR)
-        JR = -self.te[:, None] * self.WAx
-        dphi = -np.imag(self.q / self.p) + np.imag(self.s / self.p)
+        # Compute q
+        q = (
+            y[0, :] * self.M1 * self.z[0, :]
+            + y[1, :] * self.M3 * self.z[1, :]
+            + y[0, :] * self.M2 * self.z[1, :]
+            + y[1, :] * self.M2 * self.z[0, :]
+        )
+
+        # Compute H
+        self.WW *= self.te  # Equivalent to bsxfun(@times, te, WW)
+        H1 = (self.A[:, 0].conj() * self.A[:, 0]).real.T @ self.WW
+        H2 = (self.A[:, 0].conj() * self.A[:, 1]).real.T @ self.WW
+        H3 = (self.A[:, 1].conj() * self.A[:, 1]).real.T @ self.WW
+
+        # Compute s
+        s = (
+            self.z[0, :] * H1 * self.z[0, :]
+            + self.z[1, :] * H3 * self.z[1, :]
+            + self.z[0, :] * H2 * self.z[1, :]
+            + self.z[1, :] * H2 * self.z[0, :]
+        )
+
+        # Compute JB
+        JB = 1j * self.te * self.WAx
+        dphi = -(q / self.p).real
         dphi[self.p == 0] = 0
-        JR += self.WAx * 1j * dphi
-        dx = self.y + self.z * 1j * dphi
-        dx = np.real(dx / np.exp(1j * self.phi))
-        Hx = self.H1 * self.x_out[0, :] + self.H2 * self.x_out[1, :]
-        Hx = np.stack([self.H3 * self.x_out[1, :] + self.H2 * self.x_out[0, :]])
-        Hx = Hx * 2 / self.dtm
-        dx += self.M3 * Hx[0, :] - self.M2 * Hx[1, :]
-        dx += self.M1 * Hx[1, :] - self.M2 * Hx[0, :]
-        JR += self.W * (self.A @ dx)
-        JR *= np.exp(1j * self.phi)
+        JB += 1j * dphi * self.WAx
+        dx = y + self.z * dphi
+        dx = (dx / self.eiphi).imag
+        JB += self.W * (self.A @ dx)
+        JB *= self.eiphi
+
+        # Compute JR
+        JR = -self.te * self.WAx
+        dphi = -(q / self.p).imag + (s / self.p).imag
+        dphi[self.p == 0] = 0
+        JR += 1j * dphi * self.WAx
+        dx = y + self.z * 1j * dphi
+        dx = (dx / (-self.eiphi)).real
+
+        Hx = np.vstack(
+            [
+                H1 * self.x[0, :] + H2 * self.x[1, :],
+                H3 * self.x[1, :] + H2 * self.x[0, :],
+            ]
+        )
+        Hx *= 2 / self.dtm
+        dx += np.vstack(
+            [
+                self.M3 * Hx[0, :] - self.M2 * Hx[1, :],
+                self.M1 * Hx[1, :] - self.M2 * Hx[0, :],
+            ]
+        )
+        JR += self.W * (self.opts.A @ dx)
+        JR *= self.eiphi
         JR *= self.dR2
+
+        # Reshape return values
+        self.x = self.x.reshape(2, self.nx, self.ny, self.nz)
+        JB = JB.reshape(self.ne, self.nx, self.ny, self.nz)
+        JR = JR.reshape(self.ne, self.nx, self.ny, self.nz)
+        self.phi = self.phi.reshape(1, self.nx, self.ny, self.nz)
 
         return JB, JR
