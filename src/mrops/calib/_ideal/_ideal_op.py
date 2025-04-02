@@ -7,18 +7,22 @@ from numpy.typing import NDArray
 from ..._sigpy import get_device
 from ...base import NonLinop
 
-from ._ideal_reg import nonnegative_constraint, LowPassFilter
+from ._ideal_reg import nonnegative_constraint
 
 
 class IdealOp(NonLinop):
     """
     Nonlinear operator for IDEAL fat-water separation.
 
-    This operator estimates field map parameters (B0 and R2*) from multi-echo data,
-    while using the fat basis computed from echo times and field strength.
-    The operator performs phase-constrained linear least squares estimation of
-    x = [water, fat] and computes a residual r = W*A*x*exp(i*phi)-b.
-    B0 and R2* are kept as separate (real) parameters.
+    Given the complex fieldmap ``psi = B0 + 1j * R2*``,
+    the operator performs phase-constrained linear least squares estimation of the (complex)
+    ``x = [water_frac, fat_frac]`` and initial phase ``phi``.
+
+    It also computes computes forward model F_n = W*A*x*exp(i*phi), with
+    ``W = diag(exp(1j * psi * te))`` being the time evolution
+    of the complex field map and ``A`` being the complex ``(nte, 2)`` basis
+    describing time evolution of water and fat, as well as its jacobian with respect
+    to B0 and R2*.
 
     Parameters
     ----------
@@ -28,10 +32,6 @@ class IdealOp(NonLinop):
         Echo times (s), shape (ne,).
     field_strength : float
         MRI field strength (Tesla).
-    filter_size : int, optional
-        Size of the smoothing filter in k-space (default is 3).
-    smooth_phase : bool, optional
-        If True, smooth the initial phase using k-space filtering (default is False).
 
     Attributes
     ----------
@@ -47,8 +47,8 @@ class IdealOp(NonLinop):
         b: NDArray[complex],
         te: NDArray[float],
         field_strength: float,
-        filter_size: int = 3,
-        smooth_phase: bool = False,
+        # filter_size: int = 3,
+        # smooth_phase: bool = False,
     ):
         super().__init__()
         device = get_device(b)
@@ -61,9 +61,9 @@ class IdealOp(NonLinop):
         self._A = self.fat_basis(te, field_strength)
 
         # Define the low-pass filter (3x3 ones)
-        self._smooth_phase = smooth_phase
-        if smooth_phase:
-            self.kspace_smoothing = LowPassFilter(device, b.shape[1:], filter_size)
+        # self._smooth_phase = smooth_phase
+        # if smooth_phase:
+        #     self.kspace_smoothing = LowPassFilter(device, b.shape[1:], filter_size)
 
     def fat_basis(self, te, field_strength):
         """
@@ -83,6 +83,7 @@ class IdealOp(NonLinop):
             (all ones) and the second for fat (complex signal).
         """
         xp = self._xp
+
         # Multi-peak fat model
         fat_peaks_ppm = xp.array([0.9, 1.3, 1.6, 2.1, 2.75, 4.2], dtype=xp.float32)
         fat_amplitudes = xp.array(
@@ -119,8 +120,8 @@ class IdealOp(NonLinop):
 
         """
         xp = self._xp
-        B0 = psi.real
-        R2 = psi.imag
+        B0 = psi.real.copy()
+        R2 = psi.imag.copy()
 
         self._B0 = B0
         self._R2, self._dR2 = nonnegative_constraint(R2)
@@ -158,8 +159,8 @@ class IdealOp(NonLinop):
         )
 
         # Smooth the phase if required
-        if self._smooth_phase:
-            self._p = self.kspace_smoothing(self._p)
+        # if self._smooth_phase:
+        #     self._p = self.kspace_smoothing(self._p)
 
         self._phi = (
             xp.angle(self._p) / 2
@@ -177,9 +178,9 @@ class IdealOp(NonLinop):
         a = self._WAx @ self._b / max((self._WAx**2).sum(), xp.finfo(float).eps)
         self._x *= xp.abs(a)
         self._phi = xp.angle(a)
-        if self._smooth_phase:
-            self._p = self.kspace_smoothing(self._p)
-            self._phi = xp.angle(self._p)
+        # if self._smooth_phase:
+        #     self._p = self.kspace_smoothing(self._p)
+        #     self._phi = xp.angle(self._p)
 
         # Compute WAx = W * (A @ x_out)
         self._eiphi = xp.exp(1j * self._phi)  # shape (nvoxels,)

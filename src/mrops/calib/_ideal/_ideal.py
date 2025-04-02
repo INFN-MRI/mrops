@@ -1,72 +1,180 @@
-"""IDEAL algorithm."""
+"""IDEAL nonlinear optimization of fieldmap."""
+
+__all__ = []
 
 import numpy as np
-import scipy.ndimage
-import skimage.restoration
-import torch
-import torch.nn.functional as F
-from _ideal_op import IdealOp
-from _ideal_reg import IrgnmBase, LSTSQ
 
-# ---------------------------
-# Unswap and Median Filtering Functions
-# ---------------------------
+from numpy.typing import NDArray
 
+from ..._sigpy import get_device
 
-def downsample_image(image, factor, mode="trilinear"):
-    tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0).float()
-    new_size = [int(dim / factor) for dim in tensor.shape[2:]]
-    down = F.interpolate(tensor, size=new_size, mode=mode, align_corners=False)
-    return down.squeeze().numpy()
+from ...base import NonLinop
+from ...optimize import IrgnmCauchy
+
+from ._ideal_op import IdealOp
 
 
-def upsample_image(image, factor, mode="trilinear"):
-    tensor = torch.from_numpy(image).unsqueeze(0).unsqueeze(0).float()
-    new_size = [int(dim * factor) for dim in tensor.shape[2:]]
-    up = F.interpolate(tensor, size=new_size, mode=mode, align_corners=False)
-    return up.squeeze().numpy()
+def nonlinear_fieldmap(
+    echo_series,
+    te,
+    field_strength,
+    muB: float = 0.03,
+    muR: float = 0.1,
+    psi0: NDArray[complex] | None = None,
+    max_iter: int = 10,
+    linesearch_iter: int = 5,
+    ret_residual: bool = False,
+    finalize: bool = False,
+):
+    """
+    Nonlinear estimation of complex field map.
+
+    Parameters
+    ----------
+    echo_series : NDArray[complex]
+        Measured data in image space of shape ``(nte, *matrix_size)``.
+    te : NDArray[float]
+        Echo times in ``[s]`` of shape ``(nte,)``.
+    field_strength : float
+        Static field strength in ``[T]``.
+    muB : float, optional
+        Regularization strength for B0 part of the complex field map.
+    muR : float, optional
+        Regularization strength for B0 part of the complex field map.
+    psi0 : NDArray[complex], optional
+        Initial estimate of the complex field map ``B0 + 1j * R2*``
+        of shape ``(*matrix_size)``. If not provided, is estimated from ``echo_series``.
+    max_iter : int, optional
+        Number of IRGN iterations. The default is ``10``.
+    linesearch_iter : int, optional
+        Number of linesearch iterations for each IRGN iteration. The default is ``5``.
+    ret_residual : bool, optional
+        If ``True``, returns residual between measurements and prediction.
+        The default is ``False``.
+    finalize : bool, optional
+        If ``True``, returns field maps, background phase and water/fat fractions.
+        The default is ``False``.
 
 
-def unswap(psi, downsample_factor=4):
-    B0 = np.real(psi).squeeze()
-    B0_ds = downsample_image(B0, factor=downsample_factor)
-    B0_unwrapped_ds = np.array(
-        [skimage.restoration.unwrap_phase(B0_ds[i]) for i in range(B0_ds.shape[0])]
+    Returns
+    -------
+    psi : NDArray[complex]
+        Complex field map ``B0 + 1j * R2*`` of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == False``).
+    r : ND
+        Residuals after fitting of shape ``(nte, *matrix_size)`` (if ``ret_residual == True``).
+    B0 : NDArray[float]
+        B0 field map in ``[Hz]`` of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == True``).
+    R2* : NDArray[float]
+        R2* field map in ``[Hz]`` of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == True``).
+    phi0 : NDArray[float]
+        Background field map in ``[rad]`` of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == True``).
+    FF : NDArray[float]
+        Fat fraction map of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == True``).
+    WF : NDArray[float]
+        Water fraction map``[Hz]`` of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == True``).
+
+    """
+    if finalize is True and ret_residual is True:
+        raise ValueError("If finalize == True, ret_residual must be False")
+    if psi0 is None:
+        ...
+    else:
+        psi = psi0.copy()
+
+    # Regularizer (smooth B0 + zero R2)
+    psi0 = psi.real + 1j * 0.0 * psi.imag
+
+    # Set up IDEAL operator
+    ideal_op = IdealOp(echo_series, te, field_strength)
+
+    # Set up cost function for line search
+    costfun = IdealCost(ideal_op, echo_series, psi0, muB, muR)
+
+    # Set up nonlinear optimization
+    weights = abs(echo_series[0])
+    ideal_solver = IrgnmIdeal(
+        ideal_op,
+        echo_series,
+        psi,
+        psi0,
+        muB + 1j * muR,
+        costfun,
+        linesearch_iter,
+        max_iter,
+        weights,
     )
-    B0_unwrapped = upsample_image(B0_unwrapped_ds, factor=downsample_factor)
-    psi_updated = B0_unwrapped[np.newaxis, ...] + 1j * np.imag(psi.squeeze())
-    return psi_updated
+    psi = ideal_solver.run()
 
+    # Return residual only
+    if ret_residual:
+        return ideal_solver.residual
 
-def median_filter_image(image, size):
-    return scipy.ndimage.median_filter(image, size=size)
+    # Final output
+    if finalize:
+        phi, ff, wf = ideal_solver.extras
+        return psi.real / 2 / np.pi, abs(psi.imag), phi, ff, wf
 
-
-# ---------------------------
-# Full IDEAL Algorithm
-# ---------------------------
-
-
-def ideal_algorithm(psi_init, te, data, A, **kwargs):
-    psi = psi_init.copy()
-
-    for iter in range(kwargs.get("maxit_outer", 10)):
-        print(f"Outer Iteration {iter+1}")
-
-        solver = IdealIRGNM(te, data, psi, A, **kwargs)
-        psi = solver.solve()
-
-        op = IdealOp(te, A, **kwargs)
-        residual = data - op._compute_forward(psi).asarray()
-        print("Residual norm:", np.linalg.norm(residual))
-
-        if iter < kwargs.get("maxit_outer", 10) - 1:
-            if kwargs.get("unwrap_flag", True):
-                psi = unswap(psi, kwargs.get("downsample_factor", 4))
-            if kwargs.get("smooth_field", True):
-                B0_filtered = median_filter_image(
-                    np.real(psi), size=kwargs.get("median_filter_size", (3, 3, 3))
-                )
-                psi = B0_filtered[np.newaxis, ...] + 1j * np.imag(psi.squeeze())
-
+    # Return updated complex psi
     return psi
+
+
+# %% utils
+class IdealCost:
+    """IDEAL cost function for linesearch"""
+
+    def __init__(
+        self,
+        A: NonLinop,
+        b: NDArray[complex],
+        x0: NDArray[complex],
+        muB: float,
+        muR: float,
+    ):
+        self.A = A  # nonlinear operator describing the model
+        self.b = b  # observations
+        self.x0 = x0  # initial solution for regularization
+        self.muB = muB  # regularization strength for B0
+        self.muR = muR  # regularization strength for R2*
+
+    def __call__(self, input):
+        self.A.update(input)  # x = psi
+        rhs = self.A.forward() - self.b
+        bias_re = input.real - self.x0
+        bias_im = abs(input.imag) - self.x0
+        return (
+            (abs(rhs) ** 2).sum(axis=0)
+            + (self.muB * bias_re) ** 2
+            + (self.muR * bias_im) ** 2
+        )
+
+
+class IrgnmIdeal(IrgnmCauchy):
+    """IDEAL nonlinear optimization"""
+
+    @property
+    def residual(self):
+        self.A.update(self.x)
+        return self.A.forward() - self.b
+
+    @property
+    def extras(self):
+        xp = get_device(self.x).xp
+        self.A.update(self.x)
+
+        # get variables
+        phi = self.A.phi
+        x = self.A.x
+        x = x / x.sum(axis=0)  # normalize to 1
+        x = xp.nan_to_num(x, posinf=0.0, neginf=0.0)
+
+        # unpack water fraction and fat fraction
+        ff = x[1]
+        wf = x[0]
+
+        return phi, ff, wf

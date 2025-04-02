@@ -4,7 +4,7 @@ __all__ = ["IrgnmCG"]
 
 import gc
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from mrinufft._array_compat import CUPY_AVAILABLE
 
@@ -36,9 +36,9 @@ class IrgnmCG(App):
     ----------
     A : NonLinop
         The nonlinear operator A.
-    y : ArrayLike
+    y : NDArray[complex | float]
         Observation.
-    x : ArrayLike
+    x : NDArray[comples | float]
         Variable.
     max_iter : int, optional
         Number of outer (Gauss-Newton) iterations (default is ``10``).
@@ -64,8 +64,8 @@ class IrgnmCG(App):
     def __init__(
         self,
         A: NonLinop,
-        b: ArrayLike,
-        x: ArrayLike,
+        b: NDArray[complex | float],
+        x: NDArray[complex | float],
         max_iter: int = 10,
         cg_iter: int = 20,
         cg_tol: float = 1e-2,
@@ -90,8 +90,8 @@ class _IrgnmCG(IrgnmBase):
     def __init__(
         self,
         A: NonLinop,
-        b: ArrayLike,
-        x: ArrayLike,
+        b: NDArray[complex | float],
+        x: NDArray[complex | float],
         max_iter: int = 10,
         cg_iter: int = 20,
         cg_tol: float = 1e-2,

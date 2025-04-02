@@ -1,6 +1,13 @@
 """IDEAL regularization utils."""
 
-__all__ = ["median_filter", "phase_unwrap", "unswap"]
+__all__ = [
+    "median_filter",
+    "phase_unwrap",
+    "unswap",
+    "nonnegative_constraint",
+    "WeightedMean",
+    "LowPassFilter",
+]
 
 from numpy.typing import NDArray
 import numpy as np
@@ -36,6 +43,23 @@ def nonnegative_constraint(
     doutput = xp.sign(input) + (input == 0)
 
     return output, doutput
+
+
+class WeightedMean:
+    """
+    Apply weighted mean
+
+    Parameters
+    ----------
+    weights: NDArray[float]
+
+    """
+
+    def __init__(self, weights):
+        self._weights = weights
+
+    def __call__(self, input):
+        return _weighted_mean(input, self._weights)
 
 
 class LowPassFilter:
@@ -172,4 +196,4 @@ def unswap(
 # %% utils
 def _weighted_mean(data, weights):
     """Compute the weighted mean of an array."""
-    return np.sum(data * weights) / np.sum(weights)
+    return (data * weights).sum() / (weights).sum()
