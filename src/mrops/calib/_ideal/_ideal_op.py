@@ -170,10 +170,12 @@ class IdealOp(NonLinop):
         # box constraint (0<=FF<=1)
         self._x = xp.maximum(self._x, 0)
         self._WAx = self._W * (self._A @ self._x)  # shape (ne, nvoxels)
-        a = (self._WAx.conj() * self._b).sum(axis=0) / xp.maximum((abs(self._WAx)**2).sum(axis=0), xp.finfo(xp.float32).eps)
+        a = (self._WAx.conj() * self._b).sum(axis=0) / xp.maximum(
+            (abs(self._WAx) ** 2).sum(axis=0), xp.finfo(xp.float32).eps
+        )
         self._x *= xp.abs(a)
         self._phi = xp.angle(a)
-        
+
         # if self._smooth_phase:
         #     self._p = self.kspace_smoothing(self._p)
         #     self._phi = xp.angle(self._p)
@@ -200,7 +202,7 @@ class IdealOp(NonLinop):
         """
         self._compute_jacobian()
         return self.DF_n
-    
+
     def _compute_forward(self):
         pass
 

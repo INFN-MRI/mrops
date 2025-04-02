@@ -49,12 +49,12 @@ class Unswap:
         frequency_width = np.min([frequency_width] + list(magnitude.shape[-ndim:]))
 
         self._filter = fermi(ndim, magnitude.shape[-1], frequency_width)
-        self._cal_shape = self._filter.shape[: -ndim] + tuple(ndim * [frequency_width])
+        self._cal_shape = self._filter.shape[:-ndim] + tuple(ndim * [frequency_width])
         self._ndim = ndim
         self._te = te
         self._chemshift = chemshift
         self._medfilt_size = medfilt_size
-        
+
         # _magnitude = fft(magnitude, axes=list(range(-self._ndim, 0)), norm="ortho")
         # _magnitude = resize(_magnitude, self._cal_shape)
         # self._magnitude = ifft(_magnitude, axes=list(range(-self._ndim, 0)), norm="ortho").real
@@ -134,7 +134,7 @@ def _unswap(B0, te, chemshift, magnitude, medfilt_size):
     # Remove close swaps
     if min(swap[2] / np.asarray(swap[:2])) < 0.2:
         swap.pop(2)
-        
+
     # Perform unwrapping for each swap
     for s in swap:
         _s = np.asarray(s, dtype=np.float32)

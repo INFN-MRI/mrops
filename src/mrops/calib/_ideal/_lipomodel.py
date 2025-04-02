@@ -55,8 +55,12 @@ def _lipomodel(te, field_strength):
     species = {
         "water": {"frequency": 0, "relAmps": 1},
         "fat": {
-            "frequency": np.array([-3.80, -3.40, -2.60, -1.94, -0.39, 0.60], dtype=np.float32),  # ppm
-            "relAmps": np.array([0.087, 0.693, 0.128, 0.004, 0.039, 0.048], dtype=np.float32),
+            "frequency": np.array(
+                [-3.80, -3.40, -2.60, -1.94, -0.39, 0.60], dtype=np.float32
+            ),  # ppm
+            "relAmps": np.array(
+                [0.087, 0.693, 0.128, 0.004, 0.039, 0.048], dtype=np.float32
+            ),
         },
     }
 

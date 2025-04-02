@@ -84,18 +84,22 @@ def prisco_calib(
     # get device and backend
     device = get_device(echo_series)
     xp = device.xp
-    
+
     # rescale and convert units
     te = te * 1e-3  # [ms] -> [s]
     echo_series = echo_series / xp.quantile(abs(echo_series[0]), 0.95)
-    
+
     # get fat model
     fat_model = lipomodel(te, field_strength)
     fat_model.basis = to_device(fat_model.basis, device)
 
     # get unswap operator
     unswap = Unswap(
-        te, fat_model.chemshift.real, abs(echo_series[0]), smoothfilt_width, medfilt_size
+        te,
+        fat_model.chemshift.real,
+        abs(echo_series[0]),
+        smoothfilt_width,
+        medfilt_size,
     )
 
     # first iteration
@@ -286,7 +290,9 @@ def fieldmap(
     ne = echo_series.shape[0]  # TE is on the first axis
 
     # Compute dot product along the TE axis
-    tmp = (echo_series[:min(ne - 1, 3)].conj() * echo_series[1 : min(ne, 4)]).sum(axis=0)
+    tmp = (echo_series[: min(ne - 1, 3)].conj() * echo_series[1 : min(ne, 4)]).sum(
+        axis=0
+    )
     psi = xp.angle(tmp) / np.min(np.diff(te)) + 1j * xp.imag(chemshift)
 
     return psi

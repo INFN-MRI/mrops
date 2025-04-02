@@ -19,7 +19,9 @@ from ..._sigpy import Device, get_array_module
 from ...base import fft, ifft
 
 
-def nonnegative_constraint(input: NDArray[float]) -> tuple[NDArray[float], NDArray[float]]:
+def nonnegative_constraint(
+    input: NDArray[float],
+) -> tuple[NDArray[float], NDArray[float]]:
     """
     Simply returns B0 and R2* separately; Here R2* is rectified.
 
