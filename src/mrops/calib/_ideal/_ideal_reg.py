@@ -1,6 +1,6 @@
 """IDEAL regularization utils."""
 
-__all__ = ["median_smooth", "phase_unwrap", "unswap"]
+__all__ = ["median_filter", "phase_unwrap", "unswap"]
 
 from numpy.typing import NDArray
 import numpy as np
@@ -8,59 +8,80 @@ import numpy as np
 import scipy.ndimage as ndi
 from skimage.restoration import unwrap_phase
 
-from scipy.fftpack import fftn, ifftn
+from ..._sigpy import Device, get_array_module
+from ...base import fft, ifft
 
 
-def kspace_smoothing(p: np.ndarray, filter_size: int = 3) -> np.ndarray:
+def nonnegative_constraint(
+    self, input: NDArray[float]
+) -> tuple[NDArray[float], NDArray[float]]:
     """
-    Apply k-space low-pass filtering equivalent to spatial convolution.
+    Simply returns B0 and R2* separately; Here R2* is rectified.
 
     Parameters
     ----------
-    p : ndarray
-        Input data array of shape (nx, ny, nz).
-    filter_size : int, optional
-        Size of the spatial-domain box filter (default is 3).
+    input : NDArray[float]
+        Input array
 
     Returns
     -------
-    p_smooth : ndarray
-        Smoothed output array of the same shape as `p`.
-
-    Notes
-    -----
-    - This function applies a hard cutoff low-pass filter in k-space.
-    - Equivalent to a (filter_size x filter_size x filter_size) spatial box filter.
-    - Assumes `p` is real-valued and applies only real-valued smoothing.
+    output : NDArray[float]
+        Rectified input.
+    doutput : NDArray[float]
+        Derivative adjustment factor.
 
     """
-    # Get shape
-    nx, ny, nz = p.shape
+    xp = get_array_module(input)
+    output = xp.abs(input)
+    doutput = xp.sign(input) + (input == 0)
 
-    # Fourier Transform to k-space
-    P_k = fftn(p)
-
-    # Create low-pass filter in k-space (hard cutoff, centered)
-    H = np.zeros((nx, ny, nz))
-    center = (nx // 2, ny // 2, nz // 2)
-    half_size = filter_size // 2  # Half-size of the filter
-
-    H[
-        center[0] - half_size : center[0] + half_size + 1,
-        center[1] - half_size : center[1] + half_size + 1,
-        center[2] - half_size : center[2] + half_size + 1,
-    ] = 1
-
-    # Apply filter in k-space
-    P_k_smooth = P_k * H
-
-    # Inverse Fourier Transform to get back to spatial domain
-    p_smooth = ifftn(P_k_smooth).real
-
-    return p_smooth
+    return output, doutput
 
 
-def median_smooth(img: NDArray[float], size: int = 3) -> NDArray[float]:
+class LowPassFilter:
+    """
+    Apply k-space low-pass filtering equivalent to a spatial box filter.
+
+    Parameters
+    ----------
+    device : Device
+        Computational device
+    shape : list[int] | tuple[int]
+        Image shape ``(nz, ny, nx)`` or ``(ny, nx)``
+    filter_size : int
+        Kernel size
+
+    """
+
+    def __init__(
+        self, device: int | Device, shape: list[int] | tuple[int], filter_size: int
+    ):
+        xp = device.xp
+        with device:
+            filter_kernel = xp.ones(len(shape) * [filter_size], dtype=xp.complex64)
+            self._filter_fft = fft(
+                filter_kernel, oshape=shape
+            )  # Zero-padding filter to match p
+
+    def __call__(self, input: NDArray[complex | float]) -> NDArray[complex | float]:
+        xp = get_array_module(input)
+        isreal = xp.isrealobj(input)
+
+        # Bring input to frequency domain
+        input_fft = fft(input)
+
+        # Perform element-wise multiplication in frequency domain
+        output_fft = input_fft * self._filter_fft
+
+        # Compute inverse FFT to obtain the convolved result
+        output = ifft(output_fft)  # Take real part to remove numerical artifacts
+        if isreal:
+            output = output.real
+
+        return output
+
+
+def median_filter(img: NDArray[float], size: int = 3) -> NDArray[float]:
     """
     Apply median filtering for smoothing.
 

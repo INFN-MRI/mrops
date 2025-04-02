@@ -2,9 +2,12 @@
 
 __all__ = ["IdealOp"]
 
-import numpy as np
+from numpy.typing import NDArray
 
-from ...base import NonLinop, fft, ifft
+from ..._sigpy import get_device
+from ...base import NonLinop
+
+from ._ideal_reg import nonnegative_constraint, LowPassFilter
 
 
 class IdealOp(NonLinop):
@@ -19,52 +22,50 @@ class IdealOp(NonLinop):
 
     Parameters
     ----------
+    b : NDArray[complex]
+        Measured echo data. Shape can be (nvoxels, ne) or (nz, ny, nx, ne).
     te : NDArray[float]
         Echo times (s), shape (ne,).
     field_strength : float
         MRI field strength (Tesla).
-    b : NDArray[complex]
-        Measured echo data. Shape can be (nvoxels, ne) or (nz, ny, nx, ne).
     filter_size : int, optional
         Size of the smoothing filter in k-space (default is 3).
     smooth_phase : bool, optional
         If True, smooth the initial phase using k-space filtering (default is False).
 
+    Attributes
+    ----------
+    x: NDArray[complex]
+        Complex water and fat fraction array of shape ``(2, *b.shape[1:])``
+    phi: NDArray[float]
+        Initial phase of shape ``(*b.shape[1:])``
+
     """
 
     def __init__(
         self,
-        te,
-        field_strength,
-        b,
-        filter_size=3,
-        smooth_phase=False,
+        b: NDArray[complex],
+        te: NDArray[float],
+        field_strength: float,
+        filter_size: int = 3,
+        smooth_phase: bool = False,
     ):
         super().__init__()
-        self.te = np.asarray(te)  # shape (ne,)
-        self.field_strength = field_strength
-        self.filter_size = filter_size
-        self.smooth_phase = smooth_phase
-
-        # Define the low-pass filter (3x3 ones)
-        filter_kernel = np.ones((3, 3))
-        self.filter_fft = fft(
-            filter_kernel, shape=b.shape[1:]
-        )  # Zero-padding filter to match p
-
-        # b: if multidimensional, flatten spatial dims.
-        if b.ndim > 2:
-            ne = b.shape[-1]
-            self.spatial_shape = b.shape[:-1]
-            self.b = b.reshape(-1, ne).T  # shape (ne, nvoxels)
-        else:
-            self.b = b
-            self.spatial_shape = None
+        device = get_device(b)
+        self._xp = device.xp
+        self._shape = b.shape[1:]
+        self._b = b.reshape(b.shape[0], -1)  # shape (ne, nvoxels)
+        self._te = te
 
         # Compute the fat basis A from te and field strength; A has shape (ne, 2)
-        self.A = self.fat_basis(self.te, field_strength)
+        self._A = self.fat_basis(te, field_strength)
 
-    def fat_basis(self, te, Tesla):
+        # Define the low-pass filter (3x3 ones)
+        self._smooth_phase = smooth_phase
+        if smooth_phase:
+            self.kspace_smoothing = LowPassFilter(device, b.shape[1:], filter_size)
+
+    def fat_basis(self, te, field_strength):
         """
         Compute the fat spectral basis for a given field strength.
 
@@ -72,7 +73,7 @@ class IdealOp(NonLinop):
         ----------
         te : np.ndarray
             Echo times (s).
-        Tesla : float
+        field_strength : float
             Field strength (T).
 
         Returns
@@ -81,229 +82,197 @@ class IdealOp(NonLinop):
             Fat basis matrix of shape (len(te), 2), where the first column is for water
             (all ones) and the second for fat (complex signal).
         """
-        fat_peaks_ppm = np.array([0.9, 1.3, 1.6, 2.1, 2.75, 4.2])
-        fat_amplitudes = np.array([0.087, 0.693, 0.128, 0.004, 0.039, 0.048])
+        xp = self._xp
+        # Multi-peak fat model
+        fat_peaks_ppm = xp.array([0.9, 1.3, 1.6, 2.1, 2.75, 4.2], dtype=xp.float32)
+        fat_amplitudes = xp.array(
+            [0.087, 0.693, 0.128, 0.004, 0.039, 0.048], dtype=xp.float32
+        )
+
+        # Compute frequency shift for each peak
         gamma_Hz_per_T = 42.57747892e6  # Hz/T
-        shift_Hz = (fat_peaks_ppm - 4.7) * gamma_Hz_per_T * Tesla
-        fat_signal = np.sum(
-            fat_amplitudes[:, None] * np.exp(1j * 2 * np.pi * shift_Hz[:, None] * te),
+        shift_Hz = (fat_peaks_ppm - 4.7) * gamma_Hz_per_T * field_strength
+
+        # Compute basis
+        fat_signal = xp.sum(
+            fat_amplitudes[:, None] * xp.exp(1j * 2 * xp.pi * shift_Hz[:, None] * te),
             axis=0,
         )
-        return np.stack([np.ones_like(te), fat_signal], axis=1)
+        return xp.stack([0 * te + 1, fat_signal], axis=1)
 
-    def transform(self, R2):
+    @property
+    def phi(self):
+        return self._phi.reshape(*self._shape)
+
+    @property
+    def x(self):
+        return self._x.reshape(-1, *self._shape)
+
+    def update(self, psi):
         """
-        Simply returns B0 and R2* separately; Here R2* is rectified.
+        Performs update of fat, water, phi0, B0, R2* and forward model.
 
-        Parameters
-        ----------
-        R2 : np.ndarray
-            R2* decay rates (1/s), shape (nvoxels,).
+        This is accomplished by phase constrained least squares optimization.
 
-        Returns
-        -------
-        R2, dR2 : tuple
-            dR2 is a derivative adjustment (1 or sign(R2)) for nonnegativity.
+        Since the problem is very small, least squares is performed by manual
+        inversion of the (2, 2) system matrix (i.e., computing determinant).
+
         """
-        R2 = np.abs(R2)
-        dR2 = np.sign(R2) + (R2 == 0)
+        xp = self._xp
+        B0 = psi.real
+        R2 = psi.imag
 
-        return R2, dR2
-
-    def kspace_smoothing(self, p):
-        """
-        Apply k-space low-pass filtering equivalent to a spatial box filter.
-
-        Parameters
-        ----------
-        p : np.ndarray
-            1D array to be smoothed (length = nvoxels).
-
-        Returns
-        -------
-        np.ndarray
-            Smoothed array (flattened).
-        """
-        # Compute FFT of both p and the filter, ensuring they have the same size
-        p_fft = np.fft.fft2(p)
-
-        # Perform element-wise multiplication in frequency domain
-        result_fft = p_fft * self.filter_fft
-
-        # Compute inverse FFT to obtain the convolved result
-        result = np.fft.ifft2(
-            result_fft
-        ).real  # Take real part to remove numerical artifacts
-
-        return result
-
-    def update(self, x_new):
-        """
-        Compute common terms for the forward model and Jacobian given B0 and R2*.
-        B0 and R2 are 1D arrays of length nvoxels.
-
-        Returns
-        -------
-        np.ndarray
-            x_out, the estimated water-fat amplitudes (2 x nvoxels).
-        """
-        B0 = x_new[..., 0]
-        R2 = x_new[..., 1]
-
-        self.B0 = B0
-        self.R2, self.dR2 = self.transform(R2)
+        self._B0 = B0
+        self._R2, self._dR2 = nonnegative_constraint(R2)
 
         # Compute complex field map W: shape (ne, nvoxels)
-        self.W = np.exp(1j * self.te[:, None] * self.B0[None, :])
+        self._W = xp.exp(1j * self._te[:, None] * self._B0[None, :])
 
         # Compute WW = |W|^2, shape (ne, nvoxels)
-        WW = (self.W.real) ** 2 + (self.W.imag) ** 2
+        WW = (self._W.real) ** 2 + (self._W.imag) ** 2
 
         # Compute M1, M2, M3 as in MATLAB:
         # For each voxel, sum over echo times (elementwise multiplication then sum)
-        A0 = (self.A[:, 0].conj() * self.A[:, 0]).real  # shape (ne,)
-        A1 = (self.A[:, 0].conj() * self.A[:, 1]).real  # shape (ne,)
-        A2 = (self.A[:, 1].conj() * self.A[:, 1]).real  # shape (ne,)
-        self.M1 = (A0[:, None] * WW).sum(axis=0)  # shape (nvoxels,)
-        self.M2 = (A1[:, None] * WW).sum(axis=0)
-        self.M3 = (A2[:, None] * WW).sum(axis=0)
-        self.dtm = self.M1 * self.M3 - self.M2**2  # shape (nvoxels,)
+        A0 = (self._A[:, 0].conj() * self._A[:, 0]).real  # shape (ne,)
+        A1 = (self._A[:, 0].conj() * self._A[:, 1]).real  # shape (ne,)
+        A2 = (self._A[:, 1].conj() * self._A[:, 1]).real  # shape (ne,)
+        self._M1 = (A0[:, None] * WW).sum(axis=0)  # shape (nvoxels,)
+        self._M2 = (A1[:, None] * WW).sum(axis=0)
+        self._M3 = (A2[:, None] * WW).sum(axis=0)
+        self._dtm = self._M1 * self._M3 - self._M2**2  # shape (nvoxels,)
 
         # Compute z = inv(M) * A' * W' * b
-        self.Wb = self.W.conj() * self.b  # shape (ne, nvoxels)
-        z_tmp = self.A.conj().T @ self.Wb  # shape (2, nvoxels)
+        self._Wb = self._W.conj() * self._b  # shape (ne, nvoxels)
+        z_tmp = self._A.conj().T @ self._Wb  # shape (2, nvoxels)
         z_tmp /= self.dtm  # broadcast division along rows
-        self.z = 0.0 * z_tmp
-        self.z[0, :] = self.M3 * z_tmp[0, :] - self.M2 * z_tmp[1, :]
-        self.z[1, :] = self.M1 * z_tmp[1, :] - self.M2 * z_tmp[0, :]
+        self._z = 0.0 * z_tmp
+        self._z[0, :] = self._M3 * z_tmp[0, :] - self._M2 * z_tmp[1, :]
+        self._z[1, :] = self._M1 * z_tmp[1, :] - self._M2 * z_tmp[0, :]
 
         # Compute p = z' * M * z for each voxel
-        self.p = (
-            self.z[0, :] * self.M1 * self.z[0, :]
-            + self.z[1, :] * self.M3 * self.z[1, :]
-            + self.z[0, :] * self.M2 * self.z[1, :]
-            + self.z[1, :] * self.M2 * self.z[0, :]
+        self._p = (
+            self._z[0, :] * self._M1 * self._z[0, :]
+            + self._z[1, :] * self._M3 * self._z[1, :]
+            + self._z[0, :] * self._M2 * self._z[1, :]
+            + self._z[1, :] * self._M2 * self._z[0, :]
         )
 
         # Smooth the phase if required
-        if self.smooth_phase:
-            self.p = self.kspace_smoothing(self.p)
+        if self._smooth_phase:
+            self._p = self.kspace_smoothing(self._p)
 
-        self.phi = (
-            np.angle(self.p) / 2
+        self._phi = (
+            xp.angle(self._p) / 2
         )  # initial phase estimate (nvoxels,); -pi/2 < phi0 < pi/2
-        self.x_out = (self.z * np.exp(-1j * self.phi)).real  # estimated amplitudes
+        self._x = (self._z * xp.exp(-1j * self._phi)).real  # estimated amplitudes
 
         # Absorb sign of x into phi
-        self.x_out = self.x_out * np.exp(1j * self.phi)
-        self.phi = np.angle((self.x_out).sum(axis=0))  # combine components
-        self.x_out = (self.z * np.exp(-1j * self.phi)).real
+        self._x = self._x * xp.exp(1j * self._phi)
+        self._phi = xp.angle((self._x).sum(axis=0))  # combine components
+        self._x = (self._z * xp.exp(-1j * self._phi)).real
 
         # box constraint (0<=FF<=1)
-        self.x_out = np.maximum(self.x_out, 0)
-        self.WAx = self.W * (self.A @ self.x_out)  # shape (ne, nvoxels)
-        a = self.WAx @ self.b / max((self.WAx**2).sum(), np.finfo(float).eps)
-        self.x_out *= np.abs(a)
-        self.phi = np.angle(a)
-        if self.smooth_phase:
-            self.p = self.kspace_smoothing(self.p)
-            self.phi = np.angle(self.p)
-
-        super().update(x_new)
-
-    def _compute_forward(self, x_new):
-        """
-        Compute the forward model F(x) for given B0 and R2*.
-
-        Returns the residual r = W*A*x*exp(i*phi) - b.
-        B0 and R2 are 1D arrays of length nvoxels.
-        """
-        eiphi = np.exp(1j * self.phi)  # shape (nvoxels,)
+        self._x = xp.maximum(self._x, 0)
+        self._WAx = self.W * (self._A @ self._x)  # shape (ne, nvoxels)
+        a = self._WAx @ self._b / max((self._WAx**2).sum(), xp.finfo(float).eps)
+        self._x *= xp.abs(a)
+        self._phi = xp.angle(a)
+        if self._smooth_phase:
+            self._p = self.kspace_smoothing(self._p)
+            self._phi = xp.angle(self._p)
 
         # Compute WAx = W * (A @ x_out)
-        self.WAx = self.W * (self.A @ self.x_out)  # shape (ne, nvoxels)
-        self.r = self.WAx * eiphi[None, :] - self.b  # shape (ne, nvoxels)
+        self._eiphi = xp.exp(1j * self._phi)  # shape (nvoxels,)
+        self._WAx = self._W * (self._A @ self._x)  # shape (ne, nvoxels)
 
-        # prepare output
-        return self.r
+        # Store forward model
+        self.F_n = (self._WAx * self._eiphi[None, :]).reshape(-1, *self._shape)
 
-    def _compute_jacobian(self, x_new):
+    def jacobian(self):
         """
-        Compute the Jacobian of F(x) with respect to B0 and R2*.
+        Return the current Jacobian operator dF(x).
 
-        Returns:
-            JB, JR : dense Jacobian matrices (placeholders).
+        Jacobian is computed with respect to B0 (``self.jecobian()[0]``)
+        and R2* (``self.jecobian()[1]``).
+
+        Returns
+        -------
+        NDArray[comples]
+            The ``(2, *b.shape[1:])`` Jacobian operator evaluated at the last update point.
+
         """
-        # Compute y
-        y = (self.A * self.te).T @ self.Wb / self.dtm
-        y = np.vstack(
+        self._compute_jacobian()
+        return self.DF_n
+
+    def _compute_jacobian(self):
+        """Compute the Jacobian of F(x) with respect to B0 and R2*."""
+        xp = self._xp
+        y = (self._A * self._te).T @ self._Wb / self._dtm
+        y = xp.vstack(
             [
-                self.M3 * y[0, :] - self.M2 * y[1, :],
-                self.M1 * y[1, :] - self.M2 * y[0, :],
+                self._M3 * y[0, :] - self._M2 * y[1, :],
+                self._M1 * y[1, :] - self._M2 * y[0, :],
             ]
         )
 
         # Compute q
         q = (
-            y[0, :] * self.M1 * self.z[0, :]
-            + y[1, :] * self.M3 * self.z[1, :]
-            + y[0, :] * self.M2 * self.z[1, :]
-            + y[1, :] * self.M2 * self.z[0, :]
+            y[0, :] * self._M1 * self._z[0, :]
+            + y[1, :] * self._M3 * self._z[1, :]
+            + y[0, :] * self._M2 * self._z[1, :]
+            + y[1, :] * self._M2 * self._z[0, :]
         )
 
         # Compute H
-        self.WW *= self.te  # Equivalent to bsxfun(@times, te, WW)
-        H1 = (self.A[:, 0].conj() * self.A[:, 0]).real.T @ self.WW
-        H2 = (self.A[:, 0].conj() * self.A[:, 1]).real.T @ self.WW
-        H3 = (self.A[:, 1].conj() * self.A[:, 1]).real.T @ self.WW
+        self._WW *= self._te  # Equivalent to bsxfun(@times, te, WW)
+        H1 = (self._A[:, 0].conj() * self._A[:, 0]).real.T @ self._WW
+        H2 = (self._A[:, 0].conj() * self._A[:, 1]).real.T @ self._WW
+        H3 = (self._A[:, 1].conj() * self._A[:, 1]).real.T @ self._WW
 
         # Compute s
         s = (
-            self.z[0, :] * H1 * self.z[0, :]
-            + self.z[1, :] * H3 * self.z[1, :]
-            + self.z[0, :] * H2 * self.z[1, :]
-            + self.z[1, :] * H2 * self.z[0, :]
+            self._z[0, :] * H1 * self._z[0, :]
+            + self._z[1, :] * H3 * self._z[1, :]
+            + self._z[0, :] * H2 * self._z[1, :]
+            + self._z[1, :] * H2 * self._z[0, :]
         )
 
         # Compute JB
-        JB = 1j * self.te * self.WAx
-        dphi = -(q / self.p).real
-        dphi[self.p == 0] = 0
-        JB += 1j * dphi * self.WAx
-        dx = y + self.z * dphi
-        dx = (dx / self.eiphi).imag
-        JB += self.W * (self.A @ dx)
-        JB *= self.eiphi
+        JB = 1j * self._te * self._WAx
+        dphi = -(q / self._p).real
+        dphi[self._p == 0] = 0
+        JB += 1j * dphi * self._WAx
+        dx = y + self._z * dphi
+        dx = (dx / self._eiphi).imag
+        JB += self._W * (self._A @ dx)
+        JB *= self._eiphi
 
         # Compute JR
-        JR = -self.te * self.WAx
-        dphi = -(q / self.p).imag + (s / self.p).imag
-        dphi[self.p == 0] = 0
-        JR += 1j * dphi * self.WAx
-        dx = y + self.z * 1j * dphi
-        dx = (dx / (-self.eiphi)).real
+        JR = -self._te * self._WAx
+        dphi = -(q / self._p).imag + (s / self._p).imag
+        dphi[self._p == 0] = 0
+        JR += 1j * dphi * self._WAx
+        dx = y + self._z * 1j * dphi
+        dx = (dx / (-self._eiphi)).real
 
-        Hx = np.vstack(
+        Hx = xp.vstack(
             [
-                H1 * self.x[0, :] + H2 * self.x[1, :],
-                H3 * self.x[1, :] + H2 * self.x[0, :],
+                H1 * self._x[0, :] + H2 * self._x[1, :],
+                H3 * self._x[1, :] + H2 * self._x[0, :],
             ]
         )
         Hx *= 2 / self.dtm
-        dx += np.vstack(
+        dx += xp.vstack(
             [
-                self.M3 * Hx[0, :] - self.M2 * Hx[1, :],
-                self.M1 * Hx[1, :] - self.M2 * Hx[0, :],
+                self._M3 * Hx[0, :] - self._M2 * Hx[1, :],
+                self._M1 * Hx[1, :] - self._M2 * Hx[0, :],
             ]
         )
-        JR += self.W * (self.opts.A @ dx)
-        JR *= self.eiphi
-        JR *= self.dR2
+        JR += self._W * (self._A @ dx)
+        JR *= self._eiphi
+        JR *= self._dR2
 
         # Reshape return values
-        self.x = self.x.reshape(2, self.nx, self.ny, self.nz)
-        JB = JB.reshape(self.ne, self.nx, self.ny, self.nz)
-        JR = JR.reshape(self.ne, self.nx, self.ny, self.nz)
-        self.phi = self.phi.reshape(1, self.nx, self.ny, self.nz)
-
-        return JB, JR
+        JB = JB.reshape(-1, *self._shape)
+        JR = JR.reshape(-1, *self._shape)
+        self.DF_n = xp.stack((JB, JR), axis=0)
