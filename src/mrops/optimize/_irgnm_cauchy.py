@@ -16,7 +16,7 @@ if CUPY_AVAILABLE:
 
 from .._sigpy.app import App
 from .._sigpy.alg import Alg
-from ..._sigpy import get_device
+from .._sigpy import get_device
 
 from ..base import NonLinop
 from ._irgnm import IrgnmBase

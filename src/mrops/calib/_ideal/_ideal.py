@@ -18,6 +18,7 @@ from ...optimize import IrgnmCauchy
 
 from ._lipomodel import lipomodel
 from ._ideal_op import IdealOp
+from ._unswap import Unswap
 
 
 @with_numpy_cupy
@@ -30,6 +31,8 @@ def prisco_calib(
     max_iter: int = 10,
     irgnm_iter: int = 10,
     linesearch_iter: int = 5,
+    smoothfilt_width: int = 64,
+    medfilt_size: int = 3,
 ):
     """
     Nonlinear estimation of complex field map and fat fraction.
@@ -54,6 +57,11 @@ def prisco_calib(
         Number of IRGN iterations per step. The default is ``10``.
     linesearch_iter : int, optional
         Number of linesearch iterations for each IRGN iteration. The default is ``5``.
+    smoothfilt_width : int | list[int] | tuple[int], optional
+        Size of low frequency region. If scalar, assumes isotropic.
+        The default is ``64``
+    medfilt_size : int, optional
+        Size of median filter. The default is ``3``.
 
 
     Returns
@@ -81,6 +89,11 @@ def prisco_calib(
     # get fat model
     fat_model = lipomodel(te, field_strength)
     fat_model.basis = to_device(fat_model.basis, device)
+
+    # get unswap operator
+    unswap = Unswap(
+        te, fat_model.chemshift, abs(echo_series[0]), smoothfilt_width, medfilt_size
+    )
 
     # first iteration
     r, psi = nonlinear_fieldmap(
@@ -114,7 +127,7 @@ def prisco_calib(
             psi = nonlinear_fieldmap(
                 echo_series, te, fat_model, muB, muR, psi, irgnm_iter, linesearch_iter
             )
-            # unswap
+            psi = unswap(psi)
 
     # last iteration
     psi, phi, ff, wf = nonlinear_fieldmap(
@@ -128,7 +141,7 @@ def prisco_calib(
         linesearch_iter,
         finalize=True,
     )
-    # unswap
+    psi = unswap(psi)
 
     return psi.real / 2 / math.pi, abs(psi.imag), phi, ff, wf
 
