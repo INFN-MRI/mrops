@@ -26,12 +26,12 @@ class IdealOp(NonLinop):
 
     Parameters
     ----------
-    b : NDArray[complex]
-        Measured echo data. Shape can be (nvoxels, ne) or (nz, ny, nx, ne).
+    echo_series : NDArray[complex]
+        Measured echo data of shape ``(nte, *matrix_shape)``.
     te : NDArray[float]
-        Echo times (s), shape (ne,).
-    field_strength : float
-        MRI field strength (Tesla).
+        Echo times in ``[s]`` of shape ``(ne,)``.
+    fat_model : NDArray[float]
+        ``(nte, 2)`` basis describing fat/water signal evolution.
 
     Attributes
     ----------
@@ -44,26 +44,21 @@ class IdealOp(NonLinop):
 
     def __init__(
         self,
-        b: NDArray[complex],
+        echo_series: NDArray[complex],
         te: NDArray[float],
-        field_strength: float,
+        fat_model: NDArray[float],
         # filter_size: int = 3,
         # smooth_phase: bool = False,
     ):
         super().__init__()
-        device = get_device(b)
+        device = get_device(echo_series)
         self._xp = device.xp
-        self._shape = b.shape[1:]
-        self._b = b.reshape(b.shape[0], -1)  # shape (ne, nvoxels)
+        self._shape = echo_series.shape[1:]
+        self._b = echo_series.reshape(echo_series.shape[0], -1)  # shape (ne, nvoxels)
         self._te = te
 
         # Compute the fat basis A from te and field strength; A has shape (ne, 2)
-        self._A = self.fat_basis(te, field_strength)
-
-        # Define the low-pass filter (3x3 ones)
-        # self._smooth_phase = smooth_phase
-        # if smooth_phase:
-        #     self.kspace_smoothing = LowPassFilter(device, b.shape[1:], filter_size)
+        self._A = self.fat_model
 
     def fat_basis(self, te, field_strength):
         """

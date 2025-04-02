@@ -2,6 +2,8 @@
 
 __all__ = []
 
+from types import SimpleNamespace
+
 import numpy as np
 
 from numpy.typing import NDArray
@@ -15,9 +17,9 @@ from ._ideal_op import IdealOp
 
 
 def nonlinear_fieldmap(
-    echo_series,
-    te,
-    field_strength,
+    echo_series: NDArray[complex],
+    te: NDArray[float],
+    fat_model: SimpleNamespace,
     muB: float = 0.03,
     muR: float = 0.1,
     psi0: NDArray[complex] | None = None,
@@ -35,8 +37,8 @@ def nonlinear_fieldmap(
         Measured data in image space of shape ``(nte, *matrix_size)``.
     te : NDArray[float]
         Echo times in ``[s]`` of shape ``(nte,)``.
-    field_strength : float
-        Static field strength in ``[T]``.
+    fat_model : SimpleNamespace
+        Fat signal model containing ``basis`` and ``chemshift``.
     muB : float, optional
         Regularization strength for B0 part of the complex field map.
     muR : float, optional
@@ -64,7 +66,7 @@ def nonlinear_fieldmap(
     r : ND
         Residuals after fitting of shape ``(nte, *matrix_size)`` (if ``ret_residual == True``).
     B0 : NDArray[float]
-        B0 field map in ``[Hz]`` of shape ``(*matrix_size)``
+        B0 field map in ``[rad/s]`` of shape ``(*matrix_size)``
         (if ``ret_residual == False`` and ``finalize == True``).
     R2* : NDArray[float]
         R2* field map in ``[Hz]`` of shape ``(*matrix_size)``
@@ -83,7 +85,7 @@ def nonlinear_fieldmap(
     if finalize is True and ret_residual is True:
         raise ValueError("If finalize == True, ret_residual must be False")
     if psi0 is None:
-        ...
+        psi = linear_fieldmap(echo_series, te, fat_model.chemshift)
     else:
         psi = psi0.copy()
 
@@ -91,7 +93,7 @@ def nonlinear_fieldmap(
     psi0 = psi.real + 1j * 0.0 * psi.imag
 
     # Set up IDEAL operator
-    ideal_op = IdealOp(echo_series, te, field_strength)
+    ideal_op = IdealOp(echo_series, te, fat_model.basis)
 
     # Set up cost function for line search
     costfun = IdealCost(ideal_op, echo_series, psi0, muB, muR)
@@ -121,6 +123,61 @@ def nonlinear_fieldmap(
         return psi.real / 2 / np.pi, abs(psi.imag), phi, ff, wf
 
     # Return updated complex psi
+    return psi
+
+
+def linear_fieldmap(
+    echo_series: NDArray[complex],
+    te: NDArray[float],
+    chemshift: float,
+    finalize: bool = False,
+):
+    """
+    Computes the dominant frequency from 4D data.
+
+    Parameters
+    ----------
+    echo_series : NDArray[complex]
+        Measured data in image space of shape ``(nte, *matrix_size)``.
+    te : NDArray[float]
+        Echo times in ``[s]`` of shape ``(nte,)``.
+    chemshift : float
+        Main fat frequency offset in ``[Hz]``.
+    finalize : bool, optional
+        If ``True``, returns field maps. The default is ``False``.
+
+    Returns
+    -------
+    psi : NDArray[complex]
+        Complex field map ``B0 + 1j * R2*`` of shape ``(*matrix_size)``
+        (if ``finalize == False``).
+    B0 : NDArray[float]
+        B0 field map in ``[rad/s]`` of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == True``).
+    R2* : NDArray[float]
+        R2* field map in ``[Hz]`` of shape ``(*matrix_size)``
+        (if ``ret_residual == False`` and ``finalize == True``).
+
+    """
+    xp = get_device(echo_series).xp
+    ne = echo_series.shape[0]  # TE is on the first axis
+
+    # Compute dot product along the TE axis
+    tmp = xp.tensordot(echo_series[: ne - 1], echo_series[1:ne], axes=([0], [0]))
+    psi = xp.angle(tmp) / np.min(np.diff(te)) + 1j * xp.imag(chemshift)
+
+    # Compute another version using a limited number of TE steps
+    othertmp = xp.tensordot(
+        echo_series[: min(ne - 1, 3)], echo_series[1 : min(ne, 4)], axes=([0], [0])
+    )
+    dte = xp.diff(te)
+    psi = xp.angle(othertmp) / xp.min(dte[: min(ne - 1, 4)]) + 1j * xp.imag(chemshift)
+
+    # Final output
+    if finalize:
+        return psi.real / 2 / np.pi, abs(psi.imag)
+
+    # Return initial complex psi
     return psi
 
 
