@@ -58,7 +58,7 @@ class IdealOp(NonLinop):
         self._te = te
 
         # Compute the fat basis A from te and field strength; A has shape (ne, 2)
-        self._A = to_device(self.fat_model, device)
+        self._A = to_device(fat_model, device)
 
     def fat_basis(self, te, field_strength):
         """
@@ -101,7 +101,7 @@ class IdealOp(NonLinop):
         return self._phi.reshape(*self._shape)
 
     @property
-    def x(self):
+    def maps(self):
         return self._x.reshape(-1, *self._shape)
 
     def update(self, psi):
@@ -118,29 +118,29 @@ class IdealOp(NonLinop):
         B0 = psi.real.copy()
         R2 = psi.imag.copy()
 
-        self._B0 = B0
-        self._R2, self._dR2 = nonnegative_constraint(R2)
+        self._B0 = B0.ravel()
+        self._R2, self._dR2 = nonnegative_constraint(R2.ravel())
 
         # Compute complex field map W: shape (ne, nvoxels)
         self._W = xp.exp(1j * self._te[:, None] * self._B0[None, :])
 
         # Compute WW = |W|^2, shape (ne, nvoxels)
-        WW = (self._W.real) ** 2 + (self._W.imag) ** 2
+        self._WW = (self._W.real) ** 2 + (self._W.imag) ** 2
 
         # Compute M1, M2, M3 as in MATLAB:
         # For each voxel, sum over echo times (elementwise multiplication then sum)
         A0 = (self._A[:, 0].conj() * self._A[:, 0]).real  # shape (ne,)
         A1 = (self._A[:, 0].conj() * self._A[:, 1]).real  # shape (ne,)
         A2 = (self._A[:, 1].conj() * self._A[:, 1]).real  # shape (ne,)
-        self._M1 = (A0[:, None] * WW).sum(axis=0)  # shape (nvoxels,)
-        self._M2 = (A1[:, None] * WW).sum(axis=0)
-        self._M3 = (A2[:, None] * WW).sum(axis=0)
+        self._M1 = (A0[:, None] * self._WW).sum(axis=0)  # shape (nvoxels,)
+        self._M2 = (A1[:, None] * self._WW).sum(axis=0)
+        self._M3 = (A2[:, None] * self._WW).sum(axis=0)
         self._dtm = self._M1 * self._M3 - self._M2**2  # shape (nvoxels,)
 
         # Compute z = inv(M) * A' * W' * b
         self._Wb = self._W.conj() * self._b  # shape (ne, nvoxels)
         z_tmp = self._A.conj().T @ self._Wb  # shape (2, nvoxels)
-        z_tmp /= self.dtm  # broadcast division along rows
+        z_tmp /= self._dtm  # broadcast division along rows
         self._z = 0.0 * z_tmp
         self._z[0, :] = self._M3 * z_tmp[0, :] - self._M2 * z_tmp[1, :]
         self._z[1, :] = self._M1 * z_tmp[1, :] - self._M2 * z_tmp[0, :]
@@ -169,10 +169,11 @@ class IdealOp(NonLinop):
 
         # box constraint (0<=FF<=1)
         self._x = xp.maximum(self._x, 0)
-        self._WAx = self.W * (self._A @ self._x)  # shape (ne, nvoxels)
-        a = self._WAx @ self._b / max((self._WAx**2).sum(), xp.finfo(float).eps)
+        self._WAx = self._W * (self._A @ self._x)  # shape (ne, nvoxels)
+        a = (self._WAx.conj() * self._b).sum(axis=0) / xp.maximum((abs(self._WAx)**2).sum(axis=0), xp.finfo(xp.float32).eps)
         self._x *= xp.abs(a)
         self._phi = xp.angle(a)
+        
         # if self._smooth_phase:
         #     self._p = self.kspace_smoothing(self._p)
         #     self._phi = xp.angle(self._p)
@@ -199,11 +200,14 @@ class IdealOp(NonLinop):
         """
         self._compute_jacobian()
         return self.DF_n
+    
+    def _compute_forward(self):
+        pass
 
     def _compute_jacobian(self):
         """Compute the Jacobian of F(x) with respect to B0 and R2*."""
         xp = self._xp
-        y = (self._A * self._te).T @ self._Wb / self._dtm
+        y = (self._A * self._te[..., None]).conj().T @ self._Wb / self._dtm
         y = xp.vstack(
             [
                 self._M3 * y[0, :] - self._M2 * y[1, :],
@@ -220,7 +224,7 @@ class IdealOp(NonLinop):
         )
 
         # Compute H
-        self._WW *= self._te  # Equivalent to bsxfun(@times, te, WW)
+        self._WW *= self._te[:, None]  # Equivalent to bsxfun(@times, te, WW)
         H1 = (self._A[:, 0].conj() * self._A[:, 0]).real.T @ self._WW
         H2 = (self._A[:, 0].conj() * self._A[:, 1]).real.T @ self._WW
         H3 = (self._A[:, 1].conj() * self._A[:, 1]).real.T @ self._WW
@@ -234,7 +238,7 @@ class IdealOp(NonLinop):
         )
 
         # Compute JB
-        JB = 1j * self._te * self._WAx
+        JB = 1j * self._te[:, None] * self._WAx
         dphi = -(q / self._p).real
         dphi[self._p == 0] = 0
         JB += 1j * dphi * self._WAx
@@ -244,7 +248,7 @@ class IdealOp(NonLinop):
         JB *= self._eiphi
 
         # Compute JR
-        JR = -self._te * self._WAx
+        JR = -self._te[:, None] * self._WAx
         dphi = -(q / self._p).imag + (s / self._p).imag
         dphi[self._p == 0] = 0
         JR += 1j * dphi * self._WAx
@@ -257,7 +261,7 @@ class IdealOp(NonLinop):
                 H3 * self._x[1, :] + H2 * self._x[0, :],
             ]
         )
-        Hx *= 2 / self.dtm
+        Hx *= 2 / self._dtm
         dx += xp.vstack(
             [
                 self._M3 * Hx[0, :] - self._M2 * Hx[1, :],

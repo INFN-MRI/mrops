@@ -49,9 +49,15 @@ class Unswap:
         frequency_width = np.min([frequency_width] + list(magnitude.shape[-ndim:]))
 
         self._filter = fermi(ndim, magnitude.shape[-1], frequency_width)
+        self._cal_shape = self._filter.shape[: -ndim] + tuple(ndim * [frequency_width])
         self._ndim = ndim
         self._te = te
         self._chemshift = chemshift
+        self._medfilt_size = medfilt_size
+        
+        # _magnitude = fft(magnitude, axes=list(range(-self._ndim, 0)), norm="ortho")
+        # _magnitude = resize(_magnitude, self._cal_shape)
+        # self._magnitude = ifft(_magnitude, axes=list(range(-self._ndim, 0)), norm="ortho").real
         self._magnitude = magnitude
 
     def __call__(self, input):
@@ -61,17 +67,17 @@ class Unswap:
         B0 = input.real
 
         # 2) downsample B0 part
-        _B0 = fft(B0, axes=list(range(-self._ndim, 0)), norm="ortho")
-        _B0 = resize(B0, self.B0.shape[: -self._ndim] + self._filter.shape)
-        B0 = ifft(_B0, axes=list(range(-self._ndim, 0)), norm="ortho")
+        # _B0 = fft(B0, axes=list(range(-self._ndim, 0)), norm="ortho")
+        # _B0 = resize(_B0, self._cal_shape)
+        # B0 = ifft(_B0, axes=list(range(-self._ndim, 0)), norm="ortho").real
 
         # 3) unswap downsampled B0 map + median filter
-        B0 = unswap(B0, self._te, self._chemshift, self._magnitude)
+        B0 = unswap(B0, self._te, self._chemshift, self._magnitude, self._medfilt_size)
 
         # 4) apply lowpass filter to suppress ringing when upsampling
-        _B0 = fft(B0, axes=list(range(-self._ndim, 0)), norm="ortho")
-        _B0 = self._filter * resize(B0, shape)
-        B0 = ifft(_B0, axes=list(range(-self._ndim, 0)), norm="ortho")
+        # _B0 = fft(B0, axes=list(range(-self._ndim, 0)), norm="ortho")
+        # _B0 = self._filter * resize(_B0, shape)
+        # B0 = ifft(_B0, axes=list(range(-self._ndim, 0)), norm="ortho").real
 
         # 5) replace
         return B0 + 1j * input.imag
@@ -112,7 +118,7 @@ def unswap(B0, te, chemshift, magnitude, medfilt_size):
     device = get_device(B0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        B0 = _unswap(B0, te, chemshift, magnitude)
+        B0 = _unswap(B0, te, chemshift, magnitude, medfilt_size)
 
     return to_device(B0, device)
 
@@ -126,14 +132,15 @@ def _unswap(B0, te, chemshift, magnitude, medfilt_size):
     swap.append(abs(swap[1] - swap[0]))  # Both (Hz)
 
     # Remove close swaps
-    if min(swap[2] / np.array(swap[:2])) < 0.2:
+    if min(swap[2] / np.asarray(swap[:2])) < 0.2:
         swap.pop(2)
-
+        
     # Perform unwrapping for each swap
     for s in swap:
-        B0 /= s
+        _s = np.asarray(s, dtype=np.float32)
+        B0 /= _s
         B0 = unwrap_phase(B0)
-        B0 *= s
+        B0 *= _s
 
     # Remove gross aliasing using weighted mean
     alias_freq = 2 * np.pi / np.min(np.diff(te))  # Aliasing frequency (rad/s)

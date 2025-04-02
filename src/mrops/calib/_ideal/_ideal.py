@@ -42,7 +42,7 @@ def prisco_calib(
     echo_series : NDArray[complex]
         Measured data in image space of shape ``(nte, *matrix_size)``.
     te : NDArray[float]
-        Echo times in ``[s]`` of shape ``(nte,)``.
+        Echo times in ``[ms]`` of shape ``(nte,)``.
     field_strength : float
         Static field strength in ``[T]``.
     muB : float, optional
@@ -81,18 +81,21 @@ def prisco_calib(
         (if ``finalize == True``).
 
     """
-    te = te * 1e-3  # [ms] -> [s]
-
     # get device and backend
     device = get_device(echo_series)
-
+    xp = device.xp
+    
+    # rescale and convert units
+    te = te * 1e-3  # [ms] -> [s]
+    echo_series = echo_series / xp.quantile(abs(echo_series[0]), 0.95)
+    
     # get fat model
     fat_model = lipomodel(te, field_strength)
     fat_model.basis = to_device(fat_model.basis, device)
 
     # get unswap operator
     unswap = Unswap(
-        te, fat_model.chemshift, abs(echo_series[0]), smoothfilt_width, medfilt_size
+        te, fat_model.chemshift.real, abs(echo_series[0]), smoothfilt_width, medfilt_size
     )
 
     # first iteration
@@ -283,17 +286,9 @@ def fieldmap(
     ne = echo_series.shape[0]  # TE is on the first axis
 
     # Compute dot product along the TE axis
-    tmp = xp.tensordot(echo_series[: ne - 1], echo_series[1:ne], axes=([0], [0]))
+    tmp = (echo_series[:min(ne - 1, 3)].conj() * echo_series[1 : min(ne, 4)]).sum(axis=0)
     psi = xp.angle(tmp) / np.min(np.diff(te)) + 1j * xp.imag(chemshift)
 
-    # Compute another version using a limited number of TE steps
-    othertmp = xp.tensordot(
-        echo_series[: min(ne - 1, 3)], echo_series[1 : min(ne, 4)], axes=([0], [0])
-    )
-    dte = xp.diff(te)
-    psi = xp.angle(othertmp) / xp.min(dte[: min(ne - 1, 4)]) + 1j * xp.imag(chemshift)
-
-    # Return initial complex psi
     return psi
 
 
@@ -332,17 +327,17 @@ class IrgnmIdeal(IrgnmCauchy):
 
     @property
     def residual(self):
-        self.A.update(self.x)
-        return self.A.forward() - self.b
+        self.alg.A.update(self.alg.x)
+        return self.alg.A.forward() - self.alg.b
 
     @property
     def extras(self):
-        xp = get_device(self.x).xp
-        self.A.update(self.x)
+        xp = get_device(self.alg.x).xp
+        self.alg.A.update(self.alg.x)
 
         # get variables
-        phi = self.A.phi
-        x = self.A.x
+        phi = self.alg.A.phi
+        x = self.alg.A.maps
         x = x / x.sum(axis=0)  # normalize to 1
         x = xp.nan_to_num(x, posinf=0.0, neginf=0.0)
 

@@ -132,14 +132,14 @@ class _IrgnmCauchy(IrgnmBase):
 
         # Compute gradient G = J^T * r
         bias = self.x - self.x0
-        gRe = (JRe @ rhs).real + self.alphaRe**2 * bias.real
-        gIm = (JIm @ rhs).real + self.alphaIm**2 * bias.imag
+        gRe = (JRe.conj() * rhs).sum(axis=0).real + self.alphaRe**2 * bias.real
+        gIm = (JIm.conj() * rhs).sum(axis=0).real + self.alphaIm**2 * bias.imag
         G = gRe + 1j * gIm  # Complex gradient
 
         # Compute approximate Hessian
-        H1 = (JRe @ JRe).real + self.alphaRe**2
-        H2 = (JRe @ JIm).real
-        H3 = (JIm @ JIm).real + self.alphaIm**2
+        H1 = (JRe.conj() * JRe).sum(axis=0).real + self.alphaRe**2
+        H2 = (JRe.conj() * JIm).sum(axis=0).real
+        H3 = (JIm.conj() * JIm).sum(axis=0).real + self.alphaIm**2
 
         # Compute Cauchy step size
         GG = gRe**2 + gIm**2
@@ -150,7 +150,7 @@ class _IrgnmCauchy(IrgnmBase):
         step = GG / (GHG + damp) / self.linesearch_iter
         dx = -step * G
         self.solver = LineSearch(
-            self.linesearch_costfun, self.x, dx, self.x0, self.linesearch_iter
+            self.linesearch_costfun, self.x, dx, self.linesearch_iter
         )
 
     def run_solver(self):  # noqa
@@ -173,14 +173,12 @@ class LineSearch(App):
         costfun: Callable,
         x: NDArray[complex],
         dx: NDArray[complex],
-        x0: NDArray[complex],
         max_iter: int = 10,
     ):
         _alg = _LineSearch(
             costfun,
             x,
             dx,
-            x0,
             max_iter,
         )
         super().__init__(_alg, False, False, False)

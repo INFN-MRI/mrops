@@ -55,8 +55,8 @@ def _lipomodel(te, field_strength):
     species = {
         "water": {"frequency": 0, "relAmps": 1},
         "fat": {
-            "frequency": np.array([-3.80, -3.40, -2.60, -1.94, -0.39, 0.60]),  # ppm
-            "relAmps": np.array([0.087, 0.693, 0.128, 0.004, 0.039, 0.048]),
+            "frequency": np.array([-3.80, -3.40, -2.60, -1.94, -0.39, 0.60], dtype=np.float32),  # ppm
+            "relAmps": np.array([0.087, 0.693, 0.128, 0.004, 0.039, 0.048], dtype=np.float32),
         },
     }
 
@@ -65,7 +65,7 @@ def _lipomodel(te, field_strength):
 
     # Extract water and fat properties
     H2O = species["water"]["frequency"]  # Water frequency in ppm
-    water = species["water"]["relAmps"] * np.ones_like(te)
+    water = species["water"]["relAmps"] * np.ones_like(te, dtype=np.float32)
 
     ampl = species["fat"]["relAmps"]
     freq = larmor * (species["fat"]["frequency"] - H2O)  # Fat peak frequencies in Hz
@@ -87,7 +87,7 @@ def _lipomodel(te, field_strength):
         return np.linalg.norm(r)
 
     # Initial estimate for psif (B0 and R2 in rad/s)
-    chemshift_init = np.array([2 * np.pi * larmor * (1.3 - H2O), 50])
+    chemshift_init = np.array([2 * np.pi * larmor * (1.3 - H2O), 50], dtype=np.float32)
 
     # Optimize psif using scipy's minimize (equivalent to MATLAB's fminsearch)
     res = minimize(myfun, chemshift_init, args=(te, fat), method="Nelder-Mead")
