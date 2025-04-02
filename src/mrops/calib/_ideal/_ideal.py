@@ -1,19 +1,136 @@
 """IDEAL nonlinear optimization of fieldmap."""
 
-__all__ = []
+__all__ = ["prisco_calib", "fieldmap"]
 
+import math
 from types import SimpleNamespace
 
 import numpy as np
 
 from numpy.typing import NDArray
 
-from ..._sigpy import get_device
+from mrinufft._array_compat import with_numpy_cupy
+
+from ..._sigpy import get_device, to_device
 
 from ...base import NonLinop
 from ...optimize import IrgnmCauchy
 
+from ._lipomodel import lipomodel
 from ._ideal_op import IdealOp
+
+
+@with_numpy_cupy
+def prisco_calib(
+    echo_series: NDArray[complex],
+    te: NDArray[float],
+    field_strength: float,
+    muB: float = 0.03,
+    muR: float = 0.1,
+    max_iter: int = 10,
+    irgnm_iter: int = 10,
+    linesearch_iter: int = 5,
+):
+    """
+    Nonlinear estimation of complex field map and fat fraction.
+
+    Parameters
+    ----------
+    echo_series : NDArray[complex]
+        Measured data in image space of shape ``(nte, *matrix_size)``.
+    te : NDArray[float]
+        Echo times in ``[s]`` of shape ``(nte,)``.
+    field_strength : float
+        Static field strength in ``[T]``.
+    muB : float, optional
+        Regularization strength for B0 part of the complex field map.
+        The default is ``0.03``.
+    muR : float, optional
+        Regularization strength for R2* part of the complex field map.
+        The default is ``0.1``.
+    max_iter : int, optional
+        Number of IRGN steps. The default is ``10``.
+    irgnm_iter : int, optional
+        Number of IRGN iterations per step. The default is ``10``.
+    linesearch_iter : int, optional
+        Number of linesearch iterations for each IRGN iteration. The default is ``5``.
+
+
+    Returns
+    -------
+    B0 : NDArray[float]
+        B0 map in ``[Hz]`` of shape ``(*matrix_size)``.
+    R2s : NDArray[float]
+        Rectified R2* map in ``[Hz]`` of shape ``(*matrix_size)``.
+    phi0 : NDArray[float]
+        Background field map in ``[rad]`` of shape ``(*matrix_size)``
+        (if ``finalize == True``).
+    FF : NDArray[float]
+        Fat fraction map of shape ``(*matrix_size)``
+        (if ``finalize == True``).
+    WF : NDArray[float]
+        Water fraction map``[Hz]`` of shape ``(*matrix_size)``
+        (if ``finalize == True``).
+
+    """
+    te = te * 1e-3  # [ms] -> [s]
+
+    # get device and backend
+    device = get_device(echo_series)
+
+    # get fat model
+    fat_model = lipomodel(te, field_strength)
+    fat_model.basis = to_device(fat_model.basis, device)
+
+    # first iteration
+    r, psi = nonlinear_fieldmap(
+        echo_series,
+        te,
+        fat_model,
+        0.0,
+        muR,
+        None,
+        irgnm_iter,
+        linesearch_iter,
+        ret_residual=True,
+    )
+    s, _ = nonlinear_fieldmap(
+        echo_series,
+        te,
+        fat_model,
+        0.0,
+        muR,
+        psi,
+        irgnm_iter,
+        linesearch_iter,
+        ret_residual=True,
+    )
+    bad = (abs(r) ** 2).sum(axis=0) > (abs(s) ** 2).sum(axis=0)
+    psi[bad] -= fat_model.chemshift
+
+    # from 1 to n-th iteration
+    if max_iter > 1:
+        for _ in range(1, max_iter - 1):
+            psi = nonlinear_fieldmap(
+                echo_series, te, fat_model, muB, muR, psi, irgnm_iter, linesearch_iter
+            )
+            # unswap
+
+    # last iteration
+    psi, phi, ff, wf = nonlinear_fieldmap(
+        echo_series,
+        te,
+        fat_model,
+        muB,
+        muR,
+        psi,
+        irgnm_iter,
+        linesearch_iter,
+        finalize=True,
+    )
+    # unswap
+
+    return psi.real / 2 / math.pi, abs(psi.imag), phi, ff, wf
 
 
 def nonlinear_fieldmap(
@@ -41,8 +158,10 @@ def nonlinear_fieldmap(
         Fat signal model containing ``basis`` and ``chemshift``.
     muB : float, optional
         Regularization strength for B0 part of the complex field map.
+        The default is ``0.03``.
     muR : float, optional
-        Regularization strength for B0 part of the complex field map.
+        Regularization strength for R2* part of the complex field map.
+        The default is ``0.1``.
     psi0 : NDArray[complex], optional
         Initial estimate of the complex field map ``B0 + 1j * R2*``
         of shape ``(*matrix_size)``. If not provided, is estimated from ``echo_series``.
@@ -62,30 +181,25 @@ def nonlinear_fieldmap(
     -------
     psi : NDArray[complex]
         Complex field map ``B0 + 1j * R2*`` of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == False``).
+        (if ``finalize == False``).
     r : ND
-        Residuals after fitting of shape ``(nte, *matrix_size)`` (if ``ret_residual == True``).
-    B0 : NDArray[float]
-        B0 field map in ``[rad/s]`` of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == True``).
-    R2* : NDArray[float]
-        R2* field map in ``[Hz]`` of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == True``).
+        Residuals after fitting of shape ``(nte, *matrix_size)``
+        (if ``finalize == False`` and ``ret_residual == True``).
     phi0 : NDArray[float]
         Background field map in ``[rad]`` of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == True``).
+        (if ``finalize == True``).
     FF : NDArray[float]
         Fat fraction map of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == True``).
+        (if ``finalize == True``).
     WF : NDArray[float]
         Water fraction map``[Hz]`` of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == True``).
+        (if ``finalize == True``).
 
     """
-    if finalize is True and ret_residual is True:
-        raise ValueError("If finalize == True, ret_residual must be False")
+    if ret_residual is True and finalize is True:
+        raise ValueError("If ret_residual == True, finalize must be False")
     if psi0 is None:
-        psi = linear_fieldmap(echo_series, te, fat_model.chemshift)
+        psi = fieldmap(echo_series, te, fat_model.chemshift)
     else:
         psi = psi0.copy()
 
@@ -113,23 +227,23 @@ def nonlinear_fieldmap(
     )
     psi = ideal_solver.run()
 
-    # Return residual only
-    if ret_residual:
-        return ideal_solver.residual
-
     # Final output
     if finalize:
         phi, ff, wf = ideal_solver.extras
-        return psi.real / 2 / np.pi, abs(psi.imag), phi, ff, wf
+        return psi, phi, ff, wf
+
+    # Return residual only
+    if ret_residual:
+        return ideal_solver.residual, psi
 
     # Return updated complex psi
     return psi
 
 
-def linear_fieldmap(
+def fieldmap(
     echo_series: NDArray[complex],
     te: NDArray[float],
-    chemshift: float,
+    chemshift: complex = 0.0,
     finalize: bool = False,
 ):
     """
@@ -141,22 +255,15 @@ def linear_fieldmap(
         Measured data in image space of shape ``(nte, *matrix_size)``.
     te : NDArray[float]
         Echo times in ``[s]`` of shape ``(nte,)``.
-    chemshift : float
-        Main fat frequency offset in ``[Hz]``.
+    chemshift : complex
+        Main fat frequency offset in ``[Hz]``. The default is ``0.0``.
     finalize : bool, optional
         If ``True``, returns field maps. The default is ``False``.
 
     Returns
     -------
     psi : NDArray[complex]
-        Complex field map ``B0 + 1j * R2*`` of shape ``(*matrix_size)``
-        (if ``finalize == False``).
-    B0 : NDArray[float]
-        B0 field map in ``[rad/s]`` of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == True``).
-    R2* : NDArray[float]
-        R2* field map in ``[Hz]`` of shape ``(*matrix_size)``
-        (if ``ret_residual == False`` and ``finalize == True``).
+        Complex field map ``B0 + 1j * R2*`` of shape ``(*matrix_size)``.
 
     """
     xp = get_device(echo_series).xp
@@ -172,10 +279,6 @@ def linear_fieldmap(
     )
     dte = xp.diff(te)
     psi = xp.angle(othertmp) / xp.min(dte[: min(ne - 1, 4)]) + 1j * xp.imag(chemshift)
-
-    # Final output
-    if finalize:
-        return psi.real / 2 / np.pi, abs(psi.imag)
 
     # Return initial complex psi
     return psi

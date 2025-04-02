@@ -4,7 +4,7 @@ __all__ = ["IdealOp"]
 
 from numpy.typing import NDArray
 
-from ..._sigpy import get_device
+from ..._sigpy import get_device, to_device
 from ...base import NonLinop
 
 from ._ideal_reg import nonnegative_constraint
@@ -58,7 +58,7 @@ class IdealOp(NonLinop):
         self._te = te
 
         # Compute the fat basis A from te and field strength; A has shape (ne, 2)
-        self._A = self.fat_model
+        self._A = to_device(self.fat_model, device)
 
     def fat_basis(self, te, field_strength):
         """

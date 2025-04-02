@@ -2,12 +2,16 @@
 
 __all__ = ["lipomodel"]
 
+import warnings
+
 from types import SimpleNamespace
 
 from numpy.typing import NDArray
 
 import numpy as np
 from scipy.optimize import minimize
+
+from mrinufft._array_compat import with_numpy
 
 
 def lipomodel(te: NDArray[float], field_strength: float) -> SimpleNamespace:
@@ -30,7 +34,16 @@ def lipomodel(te: NDArray[float], field_strength: float) -> SimpleNamespace:
         where `B0 = real(psif)` (rad/s) and `R2 = imag(psif)`.
 
     """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        basis, chemshift = _lipomodel(te, field_strength)
 
+    return SimpleNamespace(basis=basis, chemshift=chemshift)
+
+
+# %% utils
+@with_numpy
+def _lipomodel(te, field_strength):
     if np.max(te) < 1e-3 or np.max(te) > 1:
         raise ValueError("'te' should be in seconds.")
 
@@ -80,4 +93,4 @@ def lipomodel(te: NDArray[float], field_strength: float) -> SimpleNamespace:
     res = minimize(myfun, chemshift_init, args=(te, fat), method="Nelder-Mead")
     chemshift = complex(res.x[0], res.x[1])
 
-    return SimpleNamespace(basis=basis, chemshift=chemshift)
+    return basis, chemshift
