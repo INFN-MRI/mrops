@@ -89,6 +89,16 @@ def prisco_calib(
     te = te * 1e-3  # [ms] -> [s]
     echo_series = echo_series / xp.quantile(abs(echo_series[0]), 0.95)
 
+    # estimate noise
+    noise = estimate_noise_std(echo_series)
+
+    # build mask
+    mask = (abs(echo_series) ** 2).sum(axis=0) ** 0.5 > 10 * noise
+
+    # rescale regularization
+    muB *= noise
+    muR *= noise
+
     # get fat model
     fat_model = lipomodel(te, field_strength)
     fat_model.basis = to_device(fat_model.basis, device)
@@ -97,9 +107,9 @@ def prisco_calib(
     unswap = Unswap(
         te,
         fat_model.chemshift.real,
-        abs(echo_series[0]),
-        smoothfilt_width,
+        mask,
         medfilt_size,
+        smoothfilt_width,
     )
 
     # first iteration
@@ -298,7 +308,42 @@ def fieldmap(
     return psi
 
 
-# %% utils
+# %%
+def estimate_noise_std(input):
+    """
+    Estimate the noise standard deviation from the given data.
+
+    Parameters
+    ----------
+    input : NDArrat[complex | float]
+        The input 2D/3D array (image or dataset) from which noise is estimated.
+
+    Returns
+    -------
+    float
+        Estimated noise standard deviation.
+
+    Notes
+    -----
+    - The function constructs a matrix by circularly shifting the data within
+      a 5×5 window, then finds the smallest singular value.
+    - The smallest singular value is assumed to represent noise.
+    - The estimated noise is normalized based on the number of nonzero elements.
+
+    """
+    xp = get_device(input).xp
+    X_list = []
+    for j in range(-2, 3):
+        for k in range(-2, 3):
+            shifted_data = xp.roll(input, shift=(j, k), axis=(-2, -1))
+            X_list.append(shifted_data.ravel())  # Flatten and store
+
+    X = xp.column_stack(X_list)  # Construct matrix from column vectors
+    smallest_sval = xp.min(xp.linalg.svd(X.conj().T @ X, compute_uv=False))
+
+    return (smallest_sval / xp.count_nonzero(input)) ** 0.5
+
+
 class IdealCost:
     """IDEAL cost function for linesearch"""
 

@@ -2,8 +2,6 @@
 
 __all__ = [
     "median_filter",
-    "phase_unwrap",
-    "unswap",
     "nonnegative_constraint",
     "WeightedMean",
     "LowPassFilter",
@@ -13,7 +11,6 @@ from numpy.typing import NDArray
 import numpy as np
 
 import scipy.ndimage as ndi
-from skimage.restoration import unwrap_phase
 
 from ..._sigpy import Device, get_array_module
 from ...base import fft, ifft
@@ -105,7 +102,9 @@ class LowPassFilter:
         return output
 
 
-def median_filter(img: NDArray[float], size: int = 3) -> NDArray[float]:
+def median_filter(
+    img: NDArray[float], mask: NDArray[bool], size: int = 3
+) -> NDArray[float]:
     """
     Apply median filtering for smoothing.
 
@@ -113,6 +112,8 @@ def median_filter(img: NDArray[float], size: int = 3) -> NDArray[float]:
     ----------
     img : NDArray[float]
         Input image.
+    mask : NDArray[bool]
+        Input mask.
     size : int
         Filter size.
 
@@ -122,7 +123,28 @@ def median_filter(img: NDArray[float], size: int = 3) -> NDArray[float]:
         Smoothed image.
 
     """
-    return ndi.median_filter(img, size=size)
+    # Argument checks
+    ndim = mask.ndim
+    size = np.asarray(ndim * [size])  # Ensure P is an array
+    if any(s < 1 or s % 1 != 0 for s in size):
+        raise ValueError("Invalid kernel size. Must be positive integers.")
+    if not np.isrealobj(img):
+        raise ValueError("Median is not well-defined for complex numbers.")
+    if len(size) > img.ndim:
+        raise ValueError("P has more dimensions than A.")
+
+    # Handle mask
+    orig_img = img.copy()
+    img = img.astype(np.float32)  # Convert to float to allow NaNs
+    img[np.logical_not(mask)] = np.nan  # Exclude masked elements using NaN
+
+    # Apply circular median filter
+    img_filt = ndi.median_filter(img, size=size, mode="wrap")
+
+    # Restore original values where mask is False
+    img_filt[np.logical_not(mask)] = orig_img[np.logical_not(mask)]
+
+    return img_filt
 
 
 # %% utils

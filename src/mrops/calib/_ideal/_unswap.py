@@ -13,7 +13,7 @@ from mrinufft._array_compat import with_numpy
 from ..._sigpy import get_device, to_device, resize
 from ...base import fft, ifft
 
-from ._ideal_reg import _weighted_mean, median_filter
+from ._ideal_reg import median_filter
 
 
 class Unswap:
@@ -26,12 +26,12 @@ class Unswap:
         Echo times (seconds).
     chemshift : float
         Fat-water frequency shift (rad/s).
-    magnitude : NDArray[float]
-        Magnitude image (for weighting).
-    frequency_width : int | list[int] | tuple[int]
-        Size of low frequency region. If scalar, assumes isotropic.
+    mask : NDArray[bool]
+        Mask for median filtering
     medfilt_size : int
         Size of median filter.
+    frequency_width : int | list[int] | tuple[int]
+        Size of low frequency region. If scalar, assumes isotropic.
 
     """
 
@@ -39,16 +39,16 @@ class Unswap:
         self,
         te: NDArray[float],
         chemshift: float,
-        magnitude: NDArray[float],
-        frequency_width: int,
+        mask: NDArray[bool],
         medfilt_size: int = 3,
+        frequency_width: int = 64,
     ):
-        ndim = magnitude.ndim
-        if ndim == 3 and magnitude.shape[0] < frequency_width:
+        ndim = mask.ndim
+        if ndim == 3 and mask.shape[0] < frequency_width:
             ndim = 2
-        frequency_width = np.min([frequency_width] + list(magnitude.shape[-ndim:]))
+        frequency_width = np.min([frequency_width] + list(mask.shape[-ndim:]))
 
-        self._filter = fermi(ndim, magnitude.shape[-1], frequency_width)
+        self._filter = fermi(ndim, mask.shape[-1], frequency_width)
         self._cal_shape = self._filter.shape[:-ndim] + tuple(ndim * [frequency_width])
         self._ndim = ndim
         self._te = te
@@ -58,7 +58,7 @@ class Unswap:
         # _magnitude = fft(magnitude, axes=list(range(-self._ndim, 0)), norm="ortho")
         # _magnitude = resize(_magnitude, self._cal_shape)
         # self._magnitude = ifft(_magnitude, axes=list(range(-self._ndim, 0)), norm="ortho").real
-        self._magnitude = magnitude
+        self._mask = mask
 
     def __call__(self, input):
         shape = input.shape
@@ -72,7 +72,7 @@ class Unswap:
         # B0 = ifft(_B0, axes=list(range(-self._ndim, 0)), norm="ortho").real
 
         # 3) unswap downsampled B0 map + median filter
-        B0 = unswap(B0, self._te, self._chemshift, self._magnitude, self._medfilt_size)
+        B0 = unswap(B0, self._te, self._chemshift, self._mask, self._medfilt_size)
 
         # 4) apply lowpass filter to suppress ringing when upsampling
         # _B0 = fft(B0, axes=list(range(-self._ndim, 0)), norm="ortho")
@@ -114,17 +114,17 @@ def fermi(ndim, size, width=None):
     return np.nan_to_num(filt, posinf=0.0, neginf=0.0)
 
 
-def unswap(B0, te, chemshift, magnitude, medfilt_size):
+def unswap(B0, te, chemshift, mask, medfilt_size):
     device = get_device(B0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        B0 = _unswap(B0, te, chemshift, magnitude, medfilt_size)
+        B0 = _unswap(B0, te, chemshift, mask, medfilt_size)
 
     return to_device(B0, device)
 
 
 @with_numpy
-def _unswap(B0, te, chemshift, magnitude, medfilt_size):
+def _unswap(B0, te, chemshift, mask, medfilt_size):
     B0 = B0.copy()
 
     # Define swap frequencies
@@ -139,18 +139,16 @@ def _unswap(B0, te, chemshift, magnitude, medfilt_size):
     for s in swap:
         _s = np.asarray(s, dtype=np.float32)
         B0 /= _s
-        B0 = unwrap_phase(B0)
+        B0 = unwrap_phase(np.ma.masked_array(B0, mask=np.logical_not(mask))).data
         B0 *= _s
 
     # Remove gross aliasing using weighted mean
     alias_freq = 2 * np.pi / np.min(np.diff(te))  # Aliasing frequency (rad/s)
-    center_freq = _weighted_mean(
-        B0.ravel(), magnitude.ravel()
-    )  # Weighted center B0 (rad/s)
+    center_freq = B0[mask].mean()
     nwraps = round(center_freq / alias_freq)
     B0 -= nwraps * alias_freq
 
     # Perform medianl filtering
-    B0 = median_filter(B0, medfilt_size)
+    B0 = median_filter(B0, mask, medfilt_size)
 
     return B0
