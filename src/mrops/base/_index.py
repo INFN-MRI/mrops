@@ -2,104 +2,117 @@
 
 __all__ = ["multi_index", "multi_grid"]
 
-from numpy.typing import ArrayLike
+import numpy as np
+from numpy.typing import NDArray
 
 from mrinufft._array_compat import with_numpy_cupy
 
-from .._sigpy import get_device, get_array_module
+from .._sigpy import get_device
 
 
 @with_numpy_cupy
-def multi_index(input: ArrayLike, indexes: ArrayLike) -> ArrayLike:
+def multi_index(
+        input: NDArray[complex | float], 
+        indexes: NDArray[int],
+        shape: list[int] | tuple[int],
+        stack_shape: list[int] | tuple[int] = None,
+        ) -> NDArray[complex | float]:
     """
     Extract linear indexing over last ``ndim`` dimensions of input.
 
     Parameters
     ----------
-    input : ArrayLike
-        Input ``(*B, *shape)`` data array to index, with ``B`` being a tuple of
+    input : NDArray[complex | float]
+        Input ``(..., *stacks, *shape)`` data array to index, with ``...`` being a tuple of
         batching axes and ``shape`` a tuple of Cartesian dimensions.
-    indexes : ArrayLike
-        Index array of shape ``(*I, ndims)`` with ``I`` being a tuple of
-        sampling dimensions.
+    indexes : NDArray[int]
+        Index array of shape ``(*stacks, prod(shape))``.
+    shape : list[int] | tuple[int]
+        Cartesian matrix shape.
+    stack_shape : list[int] | tuple[int], optional
+        Stack axes shape. The default is ``None`` (single stack).
 
     Returns
     -------
-    ArrayLike
-        Selected data with shape ``(*B, *I)``
+    NDArray[complex | float]
+        Selected data with shape ``(..., *stacks, prod(shape))``.
 
     """
-    xp = get_array_module(input)
-    ndims = indexes.shape[-1]
-    tup = (slice(None),) * (input.ndim - ndims) + tuple(xp.moveaxis(indexes, -1, 0))
-    return input[tup]
+    # enforce tuple
+    shape = tuple(shape)
+    
+    # enforce tuple
+    shape = tuple(shape)
+    if stack_shape is None:
+        n_stacks = 0
+        stack_shape = ()
+    else:
+        n_stacks = int(np.prod(stack_shape).item()) if len(stack_shape) != 0 else 0
+        
+    if n_stacks > 0:
+        reshaped_input = input.reshape(*input.shape[:-len(shape)], n_stacks, -1)
+        output = reshaped_input[..., indexes]
+        output = output.reshape(*output.shape[:-2], *stack_shape, -1)
+    else:
+        reshaped_input = input.reshape(*input.shape[:-len(shape)], -1)
+        output = reshaped_input[..., indexes]
+        output = output.reshape(*output.shape[:-1], -1)
+
+    return output
 
 
 @with_numpy_cupy
 def multi_grid(
-    input: ArrayLike,
-    indexes: ArrayLike,
-    shape: ArrayLike,
-    output: ArrayLike | None = None,
-) -> ArrayLike:
+    input: NDArray[complex | float],
+    indexes: NDArray[int],
+    shape: list[int] | tuple[int],
+    stack_shape: list[int] | tuple[int] = None,
+) -> NDArray[complex | float]:
     """
     Grid values in x to im_size with indices given in idx.
 
     Parameters
     ----------
-    input : ArrayLike
-        Input  sampled data with shape ``(*B, *I)``, with ``B`` being a tuple of
-        batching axes and ``I`` a tuple of sampling dimensions.
-    indexes : ArrayLike
-        Index array of shape ``(*I, ndims)`` with ``I`` being a tuple of
-        sampling dimensions.
-    shape : ArrayLike[int]
-        Cartesian shape.
-    output : ArrayLike | None, optional
-        Output ``(*B, *shape)`` data array to index, with ``B`` being a tuple of
-        batching axes and ``shape`` a tuple of Cartesian dimensions. If ``None``,
-        is initialized to zeros.
-
+    input : NDArray[complex | float]
+        Input  sampled data with shape ``(..., *stacks, prod(shape))``.
+    indexes :  NDArray[int]
+        Index array of shape ``(*stacks, prod(shape))``.
+    shape : list[int] | tuple[int]
+        Cartesian matrix shape.
+    stack_shape : list[int] | tuple[int], optional
+        Stack axes shape. The default is ``None`` (single stack).
+        
     Returns
     -------
-    ArrayLike
-        Zero-filled Cartesian data with shape ``(*B, *shape)``
+    NDArray[complex | float]
+        Zero-filled Cartesian data with shape ``(..., *stacks, *shape)``.
 
     Notes
     -----
     Adjoint of multi_index
 
     """
-    indexes = _ravel(indexes, shape)
-
-    # reshape to (..., -1)
-    ndim = len(indexes.shape)
-    input = input.reshape(*input.shape[:-ndim], -1)
-    indexes = indexes.ravel()
-
-    # perform filling
-    batch_shape = input.shape[:-1]
     device = get_device(input)
+    xp = device.xp
+    
+    # enforce tuple
+    shape = tuple(shape)
+    if stack_shape is None:
+        n_stacks = 0
+        stack_shape = ()
+    else:
+        n_stacks = int(np.prod(stack_shape).item()) if len(stack_shape) != 0 else 0
+    
+    # perform gridding
     with device:
-        xp = device.xp
-        if output is None:
-            output = xp.zeros((*batch_shape, *shape), dtype=input.dtype)
+        output = xp.zeros((*input.shape[:-1], *stack_shape, *shape), dtype=input.dtype)
+        if n_stacks > 0:
+            output = output.reshape(*output.shape[:-len(shape)-len(stack_shape)], n_stacks, -1)
+            output[..., indexes] = input
+            output = output.reshape(*input.shape[:-2], *stack_shape, *shape)
         else:
-            output[:] = 0.0
-        output = output.reshape((*batch_shape, -1))
-        leading_indices = xp.indices(output.shape[:-1])  # Generates (2, 3) grid
-        xp.add.at(output, (*leading_indices, indexes), input)
-        output = output.reshape(*batch_shape, *shape)
+            output = output.reshape(*output.shape[:-len(shape)-len(stack_shape)], -1)
+            output[..., indexes] = input
+            output = output.reshape(*input.shape[:-1], *shape)
 
     return output
-
-
-# %% subroutines
-def _ravel(indexes, shape):
-    ndim = indexes.shape[-1]
-    device = get_device(indexes)
-    xp = device.xp
-    with device:
-        unfolding = xp.cumprod([1] + shape[: ndim - 1])
-        flattened_indexes = device.xp.asarray(unfolding, dtype=indexes.dtype) * indexes
-        return flattened_indexes.sum(axis=-1)

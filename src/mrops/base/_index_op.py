@@ -2,10 +2,9 @@
 
 __all__ = ["MultiIndex", "MultiGrid"]
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from .._sigpy.linop import Linop
-from .._sigpy import get_device
 
 from ._index import multi_index, multi_grid
 
@@ -16,43 +15,36 @@ class MultiIndex(Linop):
 
     Parameters
     ----------
-    ishape : ArrayLike[int] | None, optional
-        Input shape. Use ``-1`` to enable broadcasting
-        across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    indexes : ArrayLike
-        Fourier domain index array of shape ``(..., ndim)``.
-        ``ndim`` determines the number of dimensions to index over.
+    ishape : list[int] | tuple[int]
+        Input shape.
+    stack_shape : list[int] | tuple[int]
+        Stack shape.
+    indexes : NDArray[int]
+        Index array of shape ``(*stacks, prod(shape))``.
 
     """
 
     def __init__(
-        self,
-        ishape: ArrayLike,
-        indexes: ArrayLike,
-        output: ArrayLike | None = None,
-    ):
-        self.signal_ndim = indexes.shape[-1]
-        self.fourier_ndim = len(indexes.shape[:-1])
+            self, 
+            ishape: list[int] | tuple[int], 
+            stack_shape: list[int] | tuple[int], 
+            indexes: NDArray[complex | float],
+            ):
+        self.shape = ishape
+        self.stack_shape = stack_shape
         self.indexes = indexes
 
         # get input and output shape
-        oshape = list(ishape[: -self.signal_ndim]) + list(indexes.shape[:-1])
+        oshape = (indexes.shape[0],)
 
         # initalize operator
-        super().__init__(oshape, ishape)
-        if output is None:
-            device = get_device(indexes)
-            with device:
-                xp = device.xp
-                self._output = xp.zeros(ishape, dtype=xp.complex64)
-        else:
-            self._output = output
+        super().__init__(oshape, stack_shape + ishape)
 
     def _apply(self, input):
-        return multi_index(input, self.indexes)
+        return multi_index(input, self.indexes, self.shape, self.stack_shape)
 
     def _adjoint_linop(self):
-        return MultiGrid(self.ishape, self.indexes, self._output)
+        return MultiGrid(self.shape, self.stack_shape, self.indexes)
 
     def _normal_linop(self):
         return self.H * self
@@ -64,40 +56,33 @@ class MultiGrid(Linop):
 
     Parameters
     ----------
-    oshape : ArrayLike[int] | None, optional
-        Output shape. Use ``-1`` to enable broadcasting
-        across a particular axis (e.g., ``(-1, Ny, Nx)``).
-    indexes : ArrayLike
-        Fourier domain index array of shape ``(..., ndim)``.
-        ``ndim`` determines the number of dimensions to index over.
+    oshape : list[int] | tuple[int]
+        Output shape.
+    stack_shape : list[int] | tuple[int]
+        Stack shape.
+    indexes : NDArray[int]
+        Index array of shape ``(*stacks, prod(shape))``.
 
     """
 
     def __init__(
-        self,
-        oshape: ArrayLike,
-        indexes: ArrayLike,
-        output: ArrayLike | None = None,
-    ):
-        self.signal_ndim = indexes.shape[-1]
-        self.fourier_ndim = len(indexes.shape[:-1])
+            self,
+            oshape: list[int] | tuple[int],
+            stack_shape: list[int] | tuple[int], 
+            indexes: NDArray[complex | float],
+            ):
+        self.shape = oshape
+        self.stack_shape = stack_shape
         self.indexes = indexes
 
         # get input and output shape
-        ishape = list(oshape[: -self.signal_ndim]) + list(indexes.shape[:-1])
+        ishape = (indexes.shape[0],)
 
         # initalize operator
-        super().__init__(oshape, ishape)
-        if output is None:
-            device = get_device(indexes)
-            with device:
-                xp = device.xp
-                self._output = xp.zeros(oshape, dtype=xp.complex64)
-        else:
-            self._output = output
+        super().__init__(stack_shape + oshape, ishape)
 
     def _apply(self, input):
-        return multi_grid(input, self.indexes, self.oshape, self._output)
+        return multi_grid(input, self.indexes, self.shape, self.stack_shape)
 
     def _adjoint_linop(self):
-        return MultiIndex(self.oshape, self.indexes, self._output)
+        return MultiIndex(self.shape, self.stack_shape. self.indexes)

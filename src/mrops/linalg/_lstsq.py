@@ -247,7 +247,7 @@ def _lstsq(A, b, C, d):
         x = (Q[:, :p] @ y) + (Q[:, p:] @ z)
 
     # Post process
-    if x.ndim == 3:
+    if x.ndim == 3 and x.shape[0] == 1:
         x = x.swapaxes(0, -1)[..., 0]
     if x.shape[0] == 1:
         x = x[0]

@@ -126,7 +126,7 @@ def _radial_grappa_op(calib, lamda, coords):
     dxy = dxy.astype(lGtheta.dtype)
 
     # solve
-    lG = lstsq(dxy, lGtheta, lamda)
+    lG = lstsq(dxy, lGtheta.T, lamda).T
 
     # extract components
     lGx = np.reshape(lG[0, :], (nc, nc))
@@ -151,8 +151,8 @@ def _grappa_op_2d(calib, lamda):
     Tx = np.reshape(calib[1:, ...], (-1, nc))
 
     # train the operators:
-    Gy = lstsq(Sy, Ty, lamda)
-    Gx = lstsq(Sx, Tx, lamda)
+    Gy = lstsq(Sy, Ty.T, lamda).T
+    Gx = lstsq(Sx, Tx.T, lamda).T
 
     return Gy, Gx
 
@@ -174,8 +174,8 @@ def _grappa_op_3d(calib, lamda):
     Tx = np.reshape(calib[:, :, 1:, :], (-1, nc))
 
     # train the operators:
-    Gz = lstsq(Sz, Tz, lamda)
-    Gy = lstsq(Sy, Ty, lamda)
-    Gx = lstsq(Sx, Tx, lamda)
+    Gz = lstsq(Sz, Tz.T, lamda).T
+    Gy = lstsq(Sy, Ty.T, lamda).T
+    Gx = lstsq(Sx, Tx.T, lamda).T
 
-    return Gz, Gy, Gx
+    return Gz.T, Gy.T, Gx.T
