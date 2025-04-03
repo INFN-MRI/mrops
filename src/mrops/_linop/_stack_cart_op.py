@@ -4,7 +4,7 @@ __all__ = ["StackedCartesianMR"]
 
 import numpy as np
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from .._sigpy import linop
 
@@ -18,10 +18,10 @@ class StackedCartesianMR(linop.Linop):
 
     Parameters
     ----------
-    shape : ArrayLike[int]
+    shape : list[int] | tuple[int]
         Input shape ``(nstacks, ny, nx)`` (2D)
         or ``(nstacks, nz, ny, nx)`` (3D).
-    mask : ArrayLike[int] | None, optional
+    mask : NDArray[bool] | None, optional
         Sampling mask for undersampled imaging.
         Must be shaped ``(nstacks, ny, nx | 1)`` (2D)
         or ``(nstacks, nz, ny, nx | 1)`` (2D).
@@ -37,10 +37,10 @@ class StackedCartesianMR(linop.Linop):
 
     def __init__(
         self,
-        shape: ArrayLike,
-        mask: ArrayLike | None = None,
+        shape: list[int] | tuple[int],
+        mask: NDArray[bool] | None = None,
         n_stack_axes: int = 0,
-        axes: ArrayLike | None = None,
+        axes: list[int] | tuple[int] | None = None,
         center: bool = True,
     ):
         if len(shape) != 2 + n_stack_axes and len(shape) != 3 + n_stack_axes:

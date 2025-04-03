@@ -28,11 +28,9 @@ def MulticoilOp(encoding: linop.Linop, smaps: ArrayLike) -> linop.Linop:
     """
     unsqueeze = linop.Reshape((1,) + tuple(encoding.ishape), encoding.ishape)
     F = BatchedOp(encoding, smaps.shape[0])
-    
-    
 
     # sensitivity
-    shape = smaps.shape[1:]
+    shape = encoding.ishape
     S = linop.Vstack(
         [unsqueeze * linop.Multiply(shape, smap) for smap in smaps], axis=0
     )

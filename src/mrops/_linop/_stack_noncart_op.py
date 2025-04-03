@@ -4,7 +4,7 @@ __all__ = ["StackedNonCartesianMR"]
 
 import numpy as np
 
-from numpy.typing import ArrayLike
+from numpy.typing import NDArray
 
 from .._sigpy import linop
 
@@ -18,12 +18,12 @@ class StackedNonCartesianMR(linop.Linop):
 
     Parameters
     ----------
-    ishape : ArrayLike[int] | None, optional
-        Input shape ``(nstacks, ny, nx)`` (2D) or ``(nstacks, nz, ny, nx)`` (3D).
-    coords : ArrayLike
-        Fourier domain coordinate array of shape ``(nstacks, ..., ndim)``.
+    ishape : list[int] | tuple[int]
+        Input shape ``(ny, nx)`` (2D) or ``(nz, ny, nx)`` (3D).
+    coords : NDArray[float]
+        Fourier domain coordinate array of shape ``(*stack_shape, ..., ndim)``.
         ``ndim`` determines the number of dimensions to apply the NUFFT.
-    weights : ArrayLike | None, optional
+    weights : NDArray[float] | None, optional
         Fourier domain density compensation array for NUFFT (``None`` for Cartesian).
         If not provided, does not perform density compensation. If provided,
         must be shaped ``coords.shape[:-1]``.
@@ -45,9 +45,9 @@ class StackedNonCartesianMR(linop.Linop):
 
     def __init__(
         self,
-        ishape: ArrayLike,
-        coords: ArrayLike,
-        weights: ArrayLike | None = None,
+        ishape: list[int] | tuple[int],
+        coords: NDArray[float],
+        weights: NDArray[float] | None = None,
         n_stack_axes: int = 1,
         toeplitz: bool | None = None,
         oversamp: float = 1.25,

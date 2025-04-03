@@ -9,9 +9,11 @@ from .._sigpy.linop import Resize
 
 from .. import grog
 from ..base import FFT, MultiIndex
-from ..gadgets import BatchedOp
+
+from mrinufft._array_compat import with_numpy_cupy
 
 
+@with_numpy_cupy
 def GrogMR(
     ishape: list[int] | tuple[int],
     input: NDArray[complex],
@@ -68,57 +70,143 @@ def GrogMR(
     """
     if len(ishape) != 2 and len(ishape) != 3:
         raise ValueError("shape must be either (ny, nx) or (nz, ny, nx)")
-    ndim = coords.shape[-1]
 
     # train GROG interpolator
     interpolator = grog.train(train_data, lamda)
 
     # perform GROG interpolation
     output, indexes, shape = grog.interp(
-        interpolator, 
-        input, 
-        coords, 
+        interpolator,
+        input,
+        coords,
         ishape,
         stack_axes,
         oversamp,
         radius,
         precision,
         weighting_mode,
-        )
+    )
 
-    # get stack shape
-    if stack_axes is not None:
-        try:
-            stack_shape = coords.shape[:len(stack_axes)]
-        except Exception:
-            stack_shape = (coords.shape[stack_axes],)
-    else:
-        stack_shape = ()
-    shape = tuple(shape)
-        
-    # build operators
-    I = MultiIndex(shape, stack_shape, indexes)
-    F = FFT(stack_shape + shape, axes=tuple(range(-ndim, 0)))
-    R = Resize(stack_shape + shape, stack_shape + ishape)
+    return output, _GrogMR(output, indexes, ishape, coords, shape, stack_axes, grid)
 
-    # assemble GROG operator
-    if grid:
-        output = I.H.apply(output)
-        G = F * R
-        G.stack_indexes = indexes[..., :-1]
-        G.spatial_indexes = indexes[..., -1]
-    else:
-        G = I * F * R
-        G.stack_indexes = None
-        G.spatial_indexes = None
 
-    # add batch axes
-    # batch_axes = input.shape[: -len(indexes.shape[:-1])]
-    # for ax in batch_axes:
-    #     G = BatchedOp(G, ax)
+# %% utils
+class _GrogMR(linop.Linop):
+    def __init__(self, output, indexes, ishape, coords, shape, stack_axes, grid):
+        self._batched = False
+        ndim = coords.shape[-1]
+        if stack_axes is not None:
+            try:
+                stack_shape = coords.shape[: len(stack_axes)]
+            except Exception:
+                stack_shape = (coords.shape[stack_axes],)
+        else:
+            stack_shape = ()
 
-    # improve representation
-    G.stack_axes = stack_axes
-    G.repr_str = "GROG Linop"
-    
-    return output, G
+        # enforce tuple
+        shape = tuple(shape)
+        stack_shape = tuple(stack_shape)
+        ishape = tuple(ishape)
+
+        # build operators
+        I = MultiIndex(shape, stack_shape, indexes)
+        F = FFT(stack_shape + shape, axes=tuple(range(-ndim, 0)))
+        R = Resize(stack_shape + shape, stack_shape + ishape)
+
+        # assemble GROG operator
+        if grid:
+            output = I.H.apply(output)
+            G = F * R
+            self.stack_indexes = None
+            self.spatial_indexes = None
+        else:
+            G = I * F * R
+            self.stack_indexes = indexes[..., :-1].squeeze()
+            self.spatial_indexes = indexes[..., -1]
+
+        self.stack_axes = stack_axes
+        self._linop = G
+        self.repr_str = "GROG"
+
+        super().__init__(G.oshape, G.ishape)
+
+    def _apply(self, input):
+        return self._linop._apply(input)
+
+    def _adjoint_linop(self):
+        return self._linop.H
+
+    def _normal_linop(self):
+        return self._linop.N
+
+    def broadcast(self, n_batches):
+        self._batched = True
+        for n in range(len(self._linop.linops)):
+            self._linop.H.linops[n].ishape = (n_batches,) + tuple(
+                self._linop.H.linops[n].ishape
+            )
+            self._linop.H.linops[n].oshape = (n_batches,) + tuple(
+                self._linop.H.linops[n].oshape
+            )
+        for n in range(len(self._linop.linops)):
+            self._linop.linops[n].ishape = (n_batches,) + tuple(
+                self._linop.linops[n].ishape
+            )
+            self._linop.linops[n].oshape = (n_batches,) + tuple(
+                self._linop.linops[n].oshape
+            )
+
+        self._linop.ishape = (n_batches,) + tuple(self._linop.ishape)
+        self._linop.oshape = (n_batches,) + tuple(self._linop.oshape)
+        self._linop.H.ishape = (n_batches,) + tuple(self._linop.H.ishape)
+        self._linop.H.oshape = (n_batches,) + tuple(self._linop.H.oshape)
+
+        self.ishape = (n_batches,) + tuple(self.ishape)
+        self.oshape = (n_batches,) + tuple(self.oshape)
+
+        return self
+
+    def slice(self):
+        if self.stack_axes is None:
+            return self
+        else:
+            if self._batched:
+                raise ValueError("Batched operators cannot be sliced at the moment")
+            stack_indexes = self.stack_indexes
+            stack_axes = self.stack_axes
+
+            self.stack_indexes = None
+            self.stack_axes = None
+
+            # get number of leading stack axes
+            try:
+                n_stacks = len(stack_axes)
+            except Exception:
+                n_stacks = 1
+
+            # remove stack axes
+            self._linop.linops[0].H._duplicate_entries = True
+            self._linop.linops[0].H.stack_shape = ()
+            self._linop.linops[0].stack_shape = ()
+            self._linop.linops[0].indexes = self._linop.linops[0].indexes[..., -1]
+            self._linop.linops[0].H.indexes = self._linop.linops[0].H.indexes[..., -1]
+
+            # now fix shapes
+            for n in range(len(self._linop.linops) - 1):
+                self._linop.H.linops[n].ishape = self._linop.H.linops[n].ishape[
+                    n_stacks:
+                ]
+                self._linop.H.linops[n].oshape = self._linop.H.linops[n].oshape[
+                    n_stacks:
+                ]
+            self._linop.H.linops[-1].oshape = self._linop.H.linops[-1].oshape[n_stacks:]
+            self._linop.linops[0].ishape = self._linop.linops[0].ishape[n_stacks:]
+            for n in range(1, len(self._linop.linops)):
+                self._linop.linops[n].ishape = self._linop.linops[n].ishape[n_stacks:]
+                self._linop.linops[n].oshape = self._linop.linops[n].oshape[n_stacks:]
+
+            self._linop.ishape = self._linop.ishape[n_stacks:]
+            self._linop.H.oshape = self._linop.H.oshape[n_stacks:]
+            self.ishape = self.ishape[n_stacks:]
+
+        return self, stack_indexes, stack_axes

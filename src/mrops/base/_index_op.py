@@ -25,26 +25,30 @@ class MultiIndex(Linop):
     """
 
     def __init__(
-            self, 
-            ishape: list[int] | tuple[int], 
-            stack_shape: list[int] | tuple[int], 
-            indexes: NDArray[complex | float],
-            ):
+        self,
+        ishape: list[int] | tuple[int],
+        stack_shape: list[int] | tuple[int],
+        indexes: NDArray[complex | float],
+    ):
         self.shape = ishape
         self.stack_shape = stack_shape
         self.indexes = indexes
 
         # get input and output shape
         oshape = (indexes.shape[0],)
+        ishape = stack_shape + ishape
 
         # initalize operator
-        super().__init__(oshape, stack_shape + ishape)
+        super().__init__(oshape, ishape)
 
     def _apply(self, input):
         return multi_index(input, self.indexes, self.shape, self.stack_shape)
 
     def _adjoint_linop(self):
-        return MultiGrid(self.shape, self.stack_shape, self.indexes)
+        output = MultiGrid(self.shape, self.stack_shape, self.indexes)
+        output.ishape = self.oshape
+        output.oshape = self.ishape
+        return output
 
     def _normal_linop(self):
         return self.H * self
@@ -66,23 +70,30 @@ class MultiGrid(Linop):
     """
 
     def __init__(
-            self,
-            oshape: list[int] | tuple[int],
-            stack_shape: list[int] | tuple[int], 
-            indexes: NDArray[complex | float],
-            ):
+        self,
+        oshape: list[int] | tuple[int],
+        stack_shape: list[int] | tuple[int],
+        indexes: NDArray[complex | float],
+    ):
         self.shape = oshape
         self.stack_shape = stack_shape
         self.indexes = indexes
+        self._duplicate_entries = False
 
         # get input and output shape
         ishape = (indexes.shape[0],)
+        oshape = stack_shape + oshape
 
         # initalize operator
-        super().__init__(stack_shape + oshape, ishape)
+        super().__init__(oshape, ishape)
 
     def _apply(self, input):
-        return multi_grid(input, self.indexes, self.shape, self.stack_shape)
+        return multi_grid(
+            input, self.indexes, self.shape, self.stack_shape, self._duplicate_entries
+        )
 
     def _adjoint_linop(self):
-        return MultiIndex(self.shape, self.stack_shape. self.indexes)
+        output = MultiIndex(self.shape, self.stack_shape.self.indexes)
+        output.ishape = self.oshape
+        output.oshape = self.ishape
+        return output

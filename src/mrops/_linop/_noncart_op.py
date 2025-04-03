@@ -18,7 +18,7 @@ class NonCartesianMR(linop.Linop):
 
     Parameters
     ----------
-    ishape : list[int] | tuple[int] | None, optional
+    ishape : list[int] | tuple[int]
         Input shape ``(ny, nx)`` (2D) or ``(nz, ny, nx)`` (3D).
     coords : NDArray[float]
         Fourier domain coordinate array of shape ``(..., ndim)``.
