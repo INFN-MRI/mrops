@@ -10,7 +10,7 @@ from scipy.sparse.linalg import LinearOperator
 from .._sigpy import get_device
 from .._sigpy.linop import Linop, Identity
 
-from ..interop import aslinearoperator, StackedLinearOperator
+from ..interop import aslinearoperator, stackedlinearoperator, StackedLinearOperator
 
 from mrinufft._array_compat import get_array_module
 
@@ -58,7 +58,7 @@ def build_extended_system(
             aslinearoperator(R, b) for R, b in zip(Rop, bias)
         ]
         if len(Rop):
-            A_reg = StackedLinearOperator(A, Rop, lamda)
+            A_reg = stackedlinearoperator(A, Rop, lamda)
         else:
             A_reg = A
 

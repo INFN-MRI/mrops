@@ -39,5 +39,6 @@ def MulticoilOp(encoding: linop.Linop, smaps: ArrayLike) -> linop.Linop:
         op = S.H * F * S
     else:
         op = F * S
+
     op.repr_str = "Multicoil " + encoding.repr_str
     return op

@@ -104,9 +104,9 @@ class _GrogMR(linop.Linop):
             stack_shape = ()
 
         # enforce tuple
-        shape = tuple(shape)
-        stack_shape = tuple(stack_shape)
-        ishape = tuple(ishape)
+        shape = list(shape)
+        stack_shape = list(stack_shape)
+        ishape = list(ishape)
 
         # build operators
         I = MultiIndex(shape, stack_shape, indexes)
@@ -142,27 +142,27 @@ class _GrogMR(linop.Linop):
     def broadcast(self, n_batches):
         self._batched = True
         for n in range(len(self._linop.linops)):
-            self._linop.H.linops[n].ishape = (n_batches,) + tuple(
+            self._linop.H.linops[n].ishape = [n_batches] + list(
                 self._linop.H.linops[n].ishape
             )
-            self._linop.H.linops[n].oshape = (n_batches,) + tuple(
+            self._linop.H.linops[n].oshape = [n_batches] + list(
                 self._linop.H.linops[n].oshape
             )
         for n in range(len(self._linop.linops)):
-            self._linop.linops[n].ishape = (n_batches,) + tuple(
+            self._linop.linops[n].ishape = [n_batches] + list(
                 self._linop.linops[n].ishape
             )
-            self._linop.linops[n].oshape = (n_batches,) + tuple(
+            self._linop.linops[n].oshape = [n_batches] + list(
                 self._linop.linops[n].oshape
             )
 
-        self._linop.ishape = (n_batches,) + tuple(self._linop.ishape)
-        self._linop.oshape = (n_batches,) + tuple(self._linop.oshape)
-        self._linop.H.ishape = (n_batches,) + tuple(self._linop.H.ishape)
-        self._linop.H.oshape = (n_batches,) + tuple(self._linop.H.oshape)
+        self._linop.ishape = [n_batches] + list(self._linop.ishape)
+        self._linop.oshape = [n_batches] + list(self._linop.oshape)
+        self._linop.H.ishape = [n_batches] + list(self._linop.H.ishape)
+        self._linop.H.oshape = [n_batches] + list(self._linop.H.oshape)
 
-        self.ishape = (n_batches,) + tuple(self.ishape)
-        self.oshape = (n_batches,) + tuple(self.oshape)
+        self.ishape = [n_batches] + list(self.ishape)
+        self.oshape = [n_batches] + list(self.oshape)
 
         return self
 
@@ -209,4 +209,4 @@ class _GrogMR(linop.Linop):
             self._linop.H.oshape = self._linop.H.oshape[n_stacks:]
             self.ishape = self.ishape[n_stacks:]
 
-        return self, stack_indexes, stack_axes
+        return self, stack_indexes  # , stack_axes
