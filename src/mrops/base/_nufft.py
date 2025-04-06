@@ -141,7 +141,7 @@ def __nufft_init__(
     # prepare CPU nufft
     cpu_nufft = mrinufft.get_operator("finufft")(
         samples=coords.reshape(-1, coords.shape[-1]),
-        shape=shape[::-1],
+        shape=shape,
         squeeze_dims=True,
         upsampfac=oversamp,
         eps=eps,
@@ -150,7 +150,7 @@ def __nufft_init__(
     if mrinufft.check_backend("cufinufft"):
         gpu_nufft = mrinufft.get_operator("cufinufft")(
             samples=coords.reshape(-1, coords.shape[-1]),
-            shape=shape[::-1],
+            shape=shape,
             squeeze_dims=True,
             upsampfac=oversamp,
             eps=eps,

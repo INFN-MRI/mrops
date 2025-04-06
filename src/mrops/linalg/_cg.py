@@ -284,5 +284,7 @@ def _cg(A, b, x0, *, tol=0, maxiter=None, callback=None):
                 A, b, x0, atol=tol, rtol=tol, maxiter=maxiter, callback=callback
             )[0]
         else:
-            return cupy_cg(A, b, x0, atol=tol, maxiter=maxiter, callback=callback)[0]
+            return cupy_cg(
+                A, b, x0, atol=tol, tol=tol, maxiter=maxiter, callback=callback
+            )[0]
     return x0

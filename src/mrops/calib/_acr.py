@@ -83,9 +83,20 @@ def extract_acr(
         coords = rescale_coords(
             coords, shape
         )  # enforce scaling between (-0.5 * npix, 0.5 * npix)
-        cal_idx = (coords**2).sum(axis=-1) ** 0.5 <= (0.5 * cal_width)
-        cal_idx = cal_idx.reshape(-1, cal_idx.shape[-1])
-        cal_idx = np.prod(cal_idx, axis=0).astype(bool)
+        if np.allclose(coords[..., -1], np.round(coords[..., -1])):
+            stack = True
+            cal_idx = (coords[..., :2] ** 2).sum(axis=-1) ** 0.5 <= (0.5 * cal_width)
+            cal_idx = cal_idx.reshape(-1, cal_idx.shape[-1])
+            cal_idx = cal_idx.prod(axis=0)
+            cal_idx_z = abs(coords[..., -1]) <= (0.5 * cal_width)
+            cal_idx_z = cal_idx_z.reshape(-1, cal_idx.shape[-1])
+            cal_idx_z = cal_idx_z.prod(axis=-1).astype(bool)
+        else:
+            stack = False
+            cal_idx = (coords**2).sum(axis=-1) ** 0.5 <= (0.5 * cal_width)
+            cal_idx = cal_idx.reshape(-1, cal_idx.shape[-1])
+            cal_idx = cal_idx.prod(axis=0)
+        cal_idx = cal_idx.astype(bool)
 
         # select data
         _data = data[..., cal_idx]
@@ -94,5 +105,13 @@ def extract_acr(
             _weights = weights[..., cal_idx]
         else:
             _weights = None
+
+        if stack:
+            _data = _data[..., cal_idx_z, :]
+            _coords = _coords[..., cal_idx_z, :, :]
+            if weights is not None:
+                _weights = _weights[..., cal_idx_z, :]
+            else:
+                _weights = None
 
         return _data, _coords, _weights

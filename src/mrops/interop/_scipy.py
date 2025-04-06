@@ -125,7 +125,7 @@ class BaseStackedLinearOperator:
 
         # Compute the stacked shapes
         oshape = A.shape[0] + sum([R.shape[0] for R in Rop])  # Output size
-        ishape = A.shape[0]  # Input size (same as A)
+        ishape = A.shape[1]  # Input size (same as A)
 
         super().__init__(dtype=A.dtype, shape=(oshape, ishape))
 
