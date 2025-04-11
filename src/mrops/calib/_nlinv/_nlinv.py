@@ -44,6 +44,8 @@ def nlinv_calib(
     show_pbar: bool = False,
     leave_pbar: bool = True,
     record_time: bool = False,
+    lowmem: bool = False,
+    ret_cal: bool = True,
     ret_image: bool = False,
 ) -> tuple[NDArray[complex], NDArray[complex], NDArray[complex]]:
     """
@@ -100,6 +102,10 @@ def nlinv_calib(
         Toggle whether to leave progress bar after finished (default is ``True``).
     record_time : bool, optional
         Toggle whether record runtime (default is ``False``).
+    lowmem : bool, optional
+        Toggle whether returning low resolution k-space coil kernels (default is ``False``).
+    ret_cal : bool, optional
+        Toggle whether returning synthesized calibration region (default is ``True``).
     ret_image : bool, optional
         Toggle whether returning reconstructed image (default is ``False``).
 
@@ -175,7 +181,15 @@ def nlinv_calib(
     ).run()
 
     return _postprocess_output(
-        NONCART, _nlinv, xhat, yscale, cshape0, oshape, ret_image
+        NONCART,
+        _nlinv,
+        xhat,
+        yscale,
+        cshape0,
+        oshape,
+        lowmem,
+        ret_cal,
+        ret_image,
     )
 
 
@@ -300,7 +314,7 @@ def _initialize_guess(device, n_coils, shape, xp, dtype):  # noqa
 
 
 def _postprocess_output(
-    NONCART, _nlinv, xhat, yscale, cal_width, oshape, ret_image
+    NONCART, _nlinv, xhat, yscale, cal_width, oshape, lowmem, ret_cal, ret_image
 ):  # noqa
     """Post-process results and return sensitivity maps and calibration region."""
     x = _nlinv.W(xhat) / yscale
@@ -317,11 +331,16 @@ def _postprocess_output(
     # phref = smaps[0] / abs(smaps[0])
     # smaps = phref.conj() * smaps
 
+    # Low memory mode: return sensitivity maps k-space kernels:
+    if lowmem:
+        return fft(smaps, axes=tuple(range(-rho.ndim, 0)), norm="ortho")
+
     # Get GRAPPA training data
-    grappa_train = fft(smaps * rho, axes=tuple(range(-rho.ndim, 0)), norm="ortho")
-    if NONCART:
-        grappa_shape = list(grappa_train.shape[: -len(cal_width)]) + list(cal_width)
-        grappa_train = resize(grappa_train, grappa_shape)
+    if ret_cal:
+        grappa_train = fft(smaps * rho, axes=tuple(range(-rho.ndim, 0)), norm="ortho")
+        if NONCART:
+            grappa_shape = list(grappa_train.shape[: -len(cal_width)]) + list(cal_width)
+            grappa_train = resize(grappa_train, grappa_shape)
 
     # Interpolate Coil sensitivities to original matrix size
     smaps_shape = [smaps.shape[0]] + list(oshape[-rho.ndim :])
@@ -331,6 +350,10 @@ def _postprocess_output(
         norm="ortho",
     )
 
-    if ret_image:
+    if ret_image and ret_cal:
         return smaps, grappa_train, rho
-    return smaps, grappa_train
+    elif ret_image:
+        return smaps, rho
+    elif ret_cal:
+        return smaps, grappa_train
+    return smaps
