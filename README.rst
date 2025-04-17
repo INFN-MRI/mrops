@@ -63,12 +63,6 @@ Here's a quick example demonstrating how to use *mrops*:
     kspace = nufft_op * img  # Forward NUFFT
     img_recon = nufft_op.H * kspace  # Adjoint NUFFT
 
-    # Use in a SciPy solver (e.g., Conjugate Gradient)
-    from scipy.sparse.linalg import cg
-    img_cg, _ = cg(nufft_op.H @ nufft_op, nufft_op.H @ kspace)
-
-    print("Reconstruction complete!")
-
 Contributing
 ------------
 
