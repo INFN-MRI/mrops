@@ -3,3 +3,4 @@
 __all__ = []
 
 from . import backend  # noqa
+from . import types  # noqa

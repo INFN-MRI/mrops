@@ -1,17 +1,21 @@
 """Backend utils."""
 
 __all__ = [
-    "CUPY_AVAILABLE",
     "Device",
+    "cpu_device",
+    "CUPY_AVAILABLE",
+    "CUDA_AVAILABLE",
     "get_device",
     "get_array_module",
     "to_array_module",
-    "cpu_device",
     "to_device",
     "with_numpy",
     "with_numpy_cupy",
     "with_torch",
 ]
+
+from types import ModuleType
+from numpy.typing import NDArray
 
 import numpy as _np
 import torch as _torch
@@ -34,16 +38,18 @@ try:
 except ImportError:
     CUPY_AVAILABLE = False
 
+CUDA_AVAILABLE = CUPY_AVAILABLE or _torch.cuda.is_available()
+
 
 class Device:
     """
     Device class.
 
-    This class extends cupy.Device, with id > 0 representing the id_th GPU,
+    This class extends cupy.cuda.Device, with id > 0 representing the id_th GPU,
     and id = -1 representing CPU. cupy must be installed to use GPUs.
 
     The array module for the corresponding device can be obtained via .xp.
-    Similar to cupy.Device, the Device object can be used as a context:
+    Similar to cupy.cuda.Device, the Device object can be used as a context:
 
         >>> device = Device(2)
         >>> xp = device.xp  # xp is cupy.
@@ -158,8 +164,8 @@ class Device:
 
     # context manager
     def use(self):
-        """U
-        se computing device.
+        """
+        Use computing device.
 
         All operations after use() will use the device.
         """
@@ -182,7 +188,7 @@ class Device:
 cpu_device = Device(-1)
 
 
-def get_array_module(input):
+def get_array_module(input: NDArray) -> ModuleType:
     """
     Gets an appropriate module from :mod:`numpy`, :mod:`cupy` or :mod:`torch`.
 
@@ -196,7 +202,8 @@ def get_array_module(input):
 
     Returns
     -------
-    module: :mod:`torch`, :mod:`cupy` or :mod:`numpy` is returned based on input.
+    module : ModuleType
+        Output :mod:`torch`, :mod:`cupy` or :mod:`numpy` is returned based on ``input``.
 
     """
     if isinstance(input, _torch.Tensor):
@@ -206,7 +213,11 @@ def get_array_module(input):
     return _np
 
 
-def to_array_module(input, array_module, device=None):
+def to_array_module(
+    input: NDArray,
+    array_module: ModuleType,
+    device: int | str | _cp.cuda.Device | _torch.device | Device | None = None,
+) -> NDArray:
     """
     Set an appropriate module from :mod:`numpy`, :mod:`cupy` or :mod:`torch`.
 
@@ -216,12 +227,16 @@ def to_array_module(input, array_module, device=None):
         Input array.
     array_module : str | ModuleType
         Output module type.
-    device :  int | str | cupy.Device | torch.device | Device, optional
+    device :  int | str | cupy.cuda.Device | torch.device | Device | None, optional
         Output device. The default is ``None`` (same as input).
 
     Returns
     -------
-    Output array with module: :mod:`torch`, :mod:`cupy` or :mod:`numpy` is returned based on input.
+    output : NDArray
+        Output array with module: :mod:`torch`, :mod:`cupy` or :mod:`numpy`
+        is returned based on ``input``. If specified, array is also transferred
+        to ``device`` - by default, performs zero-copy transfer to desired
+        array module on the same device.
 
     """
     if isinstance(array_module, str):
@@ -240,7 +255,7 @@ def to_array_module(input, array_module, device=None):
     return _to_interface(input, array_module, device)
 
 
-def get_device(input):
+def get_device(input: NDArray) -> Device:
     """
     Get Device from input array.
 
@@ -251,7 +266,8 @@ def get_device(input):
 
     Returns
     -------
-    Device.
+    device :  Device
+        Computational Device.
 
     """
     if get_array_module(input) == _np:
@@ -260,7 +276,10 @@ def get_device(input):
         return Device(input.device)
 
 
-def to_device(input, device=cpu_device):
+def to_device(
+    input: NDArray,
+    device: int | str | _cp.cuda.Device | _torch.device | Device = cpu_device,
+) -> NDArray:
     """
     Move input to device. Does not copy if same device.
 
@@ -268,13 +287,13 @@ def to_device(input, device=cpu_device):
     ----------
     input : NDArray
         Input array.
-    device :  int | str | cupy.Device | torch.device | Device, optional
+    device :  int | str | cupy.cuda.Device | torch.device | Device, optional
         Output device. The default is ``cpu_device``.
 
     Returns
     -------
-    NDArray
-        Output array placed in device.
+    output : NDArray
+        Output array placed in ``device``.
 
     """
     idevice = get_device(input)
