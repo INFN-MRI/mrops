@@ -14,6 +14,7 @@ from ..base._index import multi_grid, multi_index
 from ..base._fftc import fft, ifft
 from ..gadgets import BatchedOp
 
+
 class SubspaceGrogMR(linop.Linop):
     """GROG with subspace projection."""
 
@@ -46,7 +47,9 @@ class SubspaceGrogMR(linop.Linop):
         # assign operator
         self._smaps = smaps
         if toeplitz:
-            normal = _SubspaceGrogMRNormal(grogOp, basis, self._weights, stack_indexes, smaps)
+            normal = _SubspaceGrogMRNormal(
+                grogOp, basis, self._weights, stack_indexes, smaps
+            )
         else:
             normal = None
         self._linop = BatchedOp(grogOp, ncoeff)
@@ -137,18 +140,18 @@ class _SubspaceGrogMRAdjoint(linop.Linop):
 
     def _adjoint_linop(self):
         return self._fwd
-    
-    
+
+
 class _SubspaceGrogMRNormal(linop.Linop):
     """GROG normal operator with subspace projection."""
-    
+
     def __init__(self, grogOp, basis, weights, stack_indexes, smaps):
         device = get_device(basis)
         xp = device.xp
         grid_shape = grogOp._linop.linops[-1].oshape
         center = xp.asarray(grid_shape) // 2
         b = basis[:, stack_indexes]
-        
+
         st_kern = []
         for n in range(basis.shape[0]):
             with device:
@@ -158,24 +161,31 @@ class _SubspaceGrogMRNormal(linop.Linop):
             test = multi_index(test, grogOp.spatial_indexes, shape=grid_shape)
             test = _reduce(b * test, axis=0)
             test = _mul(test, b.conj())
-            test = multi_grid(weights * test, grogOp.spatial_indexes, shape=grid_shape, duplicate_entries=True)
+            test = multi_grid(
+                weights * test,
+                grogOp.spatial_indexes,
+                shape=grid_shape,
+                duplicate_entries=True,
+            )
             st_kern.append(test)
-            
+
         # build st kernel
         st_kern = xp.stack(st_kern, axis=0)
-        ndims = len(st_kern.shape)-2
+        ndims = len(st_kern.shape) - 2
         st_kern = xp.fft.fftshift(st_kern, axes=tuple(range(-ndims, 0)))
         st_kern = xp.ascontiguousarray(st_kern)
-        self.st_kern = st_kern.reshape(basis.shape[0], basis.shape[0], -1).T.astype(xp.complex64)
+        self.st_kern = st_kern.reshape(basis.shape[0], basis.shape[0], -1).T.astype(
+            xp.complex64
+        )
         self.grid_shape = list(grid_shape)
         self._smaps = smaps.squeeze()
-        
+
         super().__init__(
             [basis.shape[0]] + grogOp.ishape,
             [basis.shape[0]] + grogOp.ishape,
             repr_str="Subspace Grog Normal",
         )
-        
+
     def _apply(self, input):
         ncoeff = self.oshape[0]
         ndims = len(self.oshape[1:])
@@ -187,11 +197,15 @@ class _SubspaceGrogMRNormal(linop.Linop):
             for n in range(self._smaps.shape[0]):
                 _tmp = _mul(self._smaps[n], input)
                 _tmp = resize(_tmp, [ncoeff] + list(self.grid_shape))
-                _tmp = fft(_tmp, axes=tuple(range(-ndims, 0)), center=False, norm="ortho")
+                _tmp = fft(
+                    _tmp, axes=tuple(range(-ndims, 0)), center=False, norm="ortho"
+                )
                 _tmp = _tmp.reshape(ncoeff, -1).T
                 _tmp = _batched_matmul(self.st_kern, _tmp)
                 _tmp = _tmp.T.reshape(-1, *self.grid_shape)
-                _tmp = ifft(_tmp, axes=tuple(range(-ndims, 0)), center=False, norm="ortho")
+                _tmp = ifft(
+                    _tmp, axes=tuple(range(-ndims, 0)), center=False, norm="ortho"
+                )
                 _tmp = resize(_tmp, [ncoeff] + list(self.oshape[1:]))
                 output = _sum(output, _mul(self._smaps[n].conj(), _tmp))
         else:
@@ -202,34 +216,38 @@ class _SubspaceGrogMRNormal(linop.Linop):
             _tmp = _tmp.resize(*self.grid_shape, -1).T
             _tmp = ifft(_tmp, axes=tuple(range(-ndims, 0)), center=False, norm="ortho")
             output = resize(_tmp, [ncoeff] + list(self.oshape[1:]))
-            
+
         return output
 
     def _adjoint_linop(self):
         return self
-    
+
     def _normal_linop(self):
         return self
-        
-# %% utils    
+
+
+# %% utils
 def _mul(a, b):
     if get_device(a).id >= 0:  # GPU case
         return a * b
     else:  # CPU + numexpr
         return (torch.as_tensor(a) * torch.as_tensor(b)).numpy()
-    
+
+
 def _sum(a, b):
     if get_device(a).id >= 0:  # GPU case
         return a + b
     else:  # CPU + numexpr
         return (torch.as_tensor(a) + torch.as_tensor(b)).numpy()
 
+
 def _reduce(a, axis):
     if get_device(a).id >= 0:  # GPU case
         return a.sum(axis)
     else:  # torch
         return torch.as_tensor(a).sum(dim=axis).numpy()
-    
+
+
 @with_torch
 def _batched_matmul(mat, vec):
     return torch.einsum("bij,...bj->...bi", mat, vec)

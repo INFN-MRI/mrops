@@ -9,8 +9,7 @@ from numpy.typing import NDArray
 from .._sigpy import get_device
 
 
-def ideal():
-    ...
+def ideal(): ...
 
 
 def _FatWater(te: NDArray[float], B0: float) -> NDArray[complex]:
@@ -80,9 +79,7 @@ def _FatWater(te: NDArray[float], B0: float) -> NDArray[complex]:
 
 
 class _FieldModel:
-    def __init__(self):
-        ...
+    def __init__(self): ...
 
 
-class PhaseModel:
-    ...
+class PhaseModel: ...
