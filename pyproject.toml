@@ -83,11 +83,12 @@ profile="black"
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = [
-    "--cov=mrops",
-    "--cov-report=term-missing",
-    "--cov-report=xml"
-]
+testpaths = "tests"
+# addopts = [
+#    "--cov=mrops",
+#    "--cov-report=term-missing",
+#    "--cov-report=xml"
+#]
 
 # linting using ruff.
 [tool.ruff]

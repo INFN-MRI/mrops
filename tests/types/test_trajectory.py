@@ -7,128 +7,123 @@ from mrops.types import Trajectory
 
 
 @pytest.fixture
-def sample_trajectory():
-    """Create a sample trajectory for testing."""
-    kx = np.random.rand(1, 1, 3, 2, 5)
-    ky = np.random.rand(1, 1, 3, 2, 5)
-    kz = np.random.rand(1, 1, 3, 1, 1)
-    contrast_axis = np.random.rand(1, 3, 1, 1, 1)
-    time_axis = np.random.rand(2, 1, 1, 1, 1)
-
-    return Trajectory(
-        kx=kx, ky=ky, kz=kz, contrast_axis=contrast_axis, time_axis=time_axis
-    )
+def kspace_coords_2d():
+    nx, ny = 4, 4
+    x = np.linspace(-0.5, 0.5, nx)
+    y = np.linspace(-0.5, 0.5, ny)
+    kx, ky = np.meshgrid(x, y, indexing="ij")
+    return kx, ky
 
 
-def test_backend_conversion_numpy(sample_trajectory):
-    """Test that `to()` converts arrays to the correct numpy backend."""
-    traj = sample_trajectory
-    traj.to("numpy", dtype=np.float32)
-
-    assert traj.backend == "numpy"
-    assert traj.kx.dtype == np.float32
-    assert traj.ky.dtype == np.float32
-    assert traj.kz.dtype == np.float32
-    assert traj.contrast_axis.dtype == np.float32
-    assert traj.time_axis.dtype == np.float32
+@pytest.fixture
+def kspace_coords_3d():
+    nx, ny, nz = 4, 4, 4
+    x = np.linspace(-0.5, 0.5, nx)
+    y = np.linspace(-0.5, 0.5, ny)
+    z = np.linspace(-0.5, 0.5, nz)
+    kx, ky, kz = np.meshgrid(x, y, z, indexing="ij")
+    return kx, ky, kz
 
 
-def test_backend_conversion_torch(sample_trajectory):
-    """Test that `to()` converts arrays to the correct torch backend."""
-    traj = sample_trajectory
-    traj.to("torch", dtype="float32", device="cpu")
+def test_2d_no_stack(kspace_coords_2d):
+    kx, ky = kspace_coords_2d
+    traj = Trajectory(ndim=2, nx=4, ny=4, kx=kx, ky=ky)
 
-    import torch
-
-    assert traj.backend == "torch"
-    assert isinstance(traj.kx, torch.Tensor)
-    assert traj.kx.dtype == torch.float32
-    assert traj.kx.device.type == "cpu"
+    assert traj.indexes.shape[0] == 2
+    assert traj.values.shape[0] == 2
+    assert traj.values.shape[1] == kx.size
 
 
-def test_backend_conversion_cupy(sample_trajectory):
-    """Test that `to()` converts arrays to the correct cupy backend."""
-    traj = sample_trajectory
-    traj.to("cupy", dtype=np.float32)
-
-    import cupy as cp
-
-    assert traj.backend == "cupy"
-    assert isinstance(traj.kx, cp.ndarray)
-    assert traj.kx.dtype == cp.float32
-
-
-def test_automatic_axis_generation(sample_trajectory):
-    """Test that missing axes are generated automatically."""
-    traj = Trajectory(
-        kx=np.random.rand(1, 1, 3, 2, 5),
-        ky=np.random.rand(1, 1, 3, 2, 5),
-        ncontrast=3,
-        ntime=2,
-        nz=3,
-    )
-
-    # Automatically generated axes
-    assert traj.contrast_axis is not None
-    assert traj.time_axis is not None
-    assert traj.kz is not None
-
-    assert traj.contrast_axis.shape == (1, 3, 1, 1, 1)
-    assert traj.time_axis.shape == (2, 1, 1, 1, 1)
-    assert traj.kz.shape == (1, 1, 3, 1, 1)
-
-
-def test_shape_compatibility():
-    """Test that shape compatibility checks are done properly."""
-    kx = np.random.rand(1, 1, 3, 2, 5)
-    ky = np.random.rand(1, 1, 3, 2, 5)
-    contrast_axis = np.random.rand(1, 3, 1, 1, 1)
-    time_axis = np.random.rand(2, 1, 1, 1, 1)
+def test_2d_with_stack(kspace_coords_2d):
+    kx, ky = kspace_coords_2d
+    slice_axis = np.arange(3)
+    contrast_axis = np.arange(2)
 
     traj = Trajectory(
+        ndim=2,
+        nx=4,
+        ny=4,
         kx=kx,
         ky=ky,
+        slice_axis=slice_axis,
         contrast_axis=contrast_axis,
+    )
+
+    n_stack = len(slice_axis) * len(contrast_axis)
+    n_spatial = kx.size
+    assert traj.indexes.shape == (2, n_stack * n_spatial)
+    assert traj.values.shape == (2, n_stack * n_spatial)
+
+
+def test_3d_with_stack(kspace_coords_3d):
+    kx, ky, kz = kspace_coords_3d
+    time_axis = np.arange(3)
+
+    traj = Trajectory(
+        ndim=3,
+        nx=4,
+        ny=4,
+        nz=4,
+        kx=kx,
+        ky=ky,
+        kz=kz,
         time_axis=time_axis,
-        ncontrast=3,
-        ntime=2,
     )
 
-    # Check that the trajectory's shape is consistent with broadcasting
-    assert traj.shape == (2, 3, 1, 2, 5)  # Broadcasted shape of all attributes
+    n_stack = len(time_axis)
+    n_spatial = kx.size
+    assert traj.indexes.shape == (2, n_stack * n_spatial)
+    assert traj.values.shape == (2, n_stack * n_spatial)  # kx, ky, kz
 
 
-def test_index_matrix(sample_trajectory):
-    """Test that `index_matrix` returns the correct (n, 2) index matrix."""
-    traj = sample_trajectory
-    index_matrix = traj.index_matrix
-
-    # Check that the shape of index_matrix matches the expected total number of elements
-    total_elements = np.prod(traj.shape)
-    assert index_matrix.shape == (total_elements, 2)
-
-    # The first column should contain raveled stack indexes (i.e., linear indices)
-    assert np.all(
-        index_matrix[:, 0]
-        == np.ravel_multi_index(np.indices(traj.shape), traj.shape).flatten()
+def test_index_value_consistency(kspace_coords_2d):
+    kx, ky = kspace_coords_2d
+    time_axis = np.arange(2)
+    traj = Trajectory(
+        ndim=2,
+        nx=4,
+        ny=4,
+        kx=kx,
+        ky=ky,
+        time_axis=time_axis,
+        nframes=2,
     )
 
-    # The second column should contain sequential raveled trajectory indices
-    assert np.all(index_matrix[:, 1] == np.arange(total_elements))
+    # index[1] gives spatial index
+    # values[:, i] should equal the corresponding raveled coordinates
+    spatial = traj.indexes[1]
+    for i, s in enumerate(spatial):
+        np.testing.assert_allclose(
+            traj.values[:, i], [traj.kx.ravel()[s], traj.ky.ravel()[s]]
+        )
 
 
-def test_value_matrix(sample_trajectory):
-    """Test that `value_matrix` returns the correct (n, m) value matrix."""
-    traj = sample_trajectory
-    value_matrix = traj.value_matrix
+def test_caching_of_indexes_and_values(kspace_coords_2d):
+    kx, ky = kspace_coords_2d
+    traj = Trajectory(ndim=2, nx=4, ny=4, kx=kx, ky=ky)
+    # Access triggers caching
+    _ = traj.indexes
+    _ = traj.values
+    assert traj._indexes is not None
+    assert traj._values is not None
 
-    # Check that the shape of value_matrix matches the expected total number of elements
-    total_elements = np.prod(traj.shape)
-    assert value_matrix.shape == (total_elements, 5)  # Time, contrast, kz, ky, kx
 
-    # The first few columns should contain stack axis values (time_axis, contrast_axis, kz)
-    assert value_matrix[:, 0].shape == (total_elements,)  # time_axis
-    assert value_matrix[:, 1].shape == (total_elements,)  # contrast_axis
-    assert value_matrix[:, 2].shape == (total_elements,)  # kz
-    assert value_matrix[:, 3].shape == (total_elements,)  # ky
-    assert value_matrix[:, 4].shape == (total_elements,)  # kx
+def test_single_element_stack_axes(kspace_coords_2d):
+    kx, ky = kspace_coords_2d
+    traj = Trajectory(
+        ndim=2,
+        nx=4,
+        ny=4,
+        kx=kx,
+        ky=ky,
+        nslices=1,
+        ncontrasts=1,
+        nframes=1,
+        slice_axis=np.array([0]),
+        contrast_axis=np.array([0]),
+        time_axis=np.array([0]),
+    )
+
+    n_spatial = kx.size
+    assert traj.indexes.shape == (2, n_spatial)
+    assert traj.values.shape == (2, n_spatial)

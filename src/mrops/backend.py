@@ -12,6 +12,7 @@ __all__ = [
     "with_numpy",
     "with_numpy_cupy",
     "with_torch",
+    "NP2TORCH",
 ]
 
 from types import ModuleType
@@ -26,6 +27,7 @@ from mrinufft._array_compat import (
     with_torch,
     _to_interface,
 )
+from mrinufft._utils import NP2TORCH
 
 CUPY_AVAILABLE = True
 try:
