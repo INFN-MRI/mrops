@@ -1,129 +1,213 @@
 """Test trajectory container."""
 
+import itertools
 import numpy as np
+
 import pytest
 
 from pygrog.types import Trajectory
 
 
+# === Fixtures === #
 @pytest.fixture
-def kspace_coords_2d():
-    nx, ny = 4, 4
-    x = np.linspace(-0.5, 0.5, nx)
-    y = np.linspace(-0.5, 0.5, ny)
-    kx, ky = np.meshgrid(x, y, indexing="ij")
+def kspace_2d():
+    kx = np.random.randn(4, 128)
+    ky = np.random.randn(4, 128)
     return kx, ky
 
 
 @pytest.fixture
-def kspace_coords_3d():
-    nx, ny, nz = 4, 4, 4
-    x = np.linspace(-0.5, 0.5, nx)
-    y = np.linspace(-0.5, 0.5, ny)
-    z = np.linspace(-0.5, 0.5, nz)
-    kx, ky, kz = np.meshgrid(x, y, z, indexing="ij")
+def kspace_3d():
+    kx = np.random.randn(4, 128)
+    ky = np.random.randn(4, 128)
+    kz = np.random.randn(4, 128)
     return kx, ky, kz
 
 
-def test_2d_no_stack(kspace_coords_2d):
-    kx, ky = kspace_coords_2d
-    traj = Trajectory(ndim=2, nx=4, ny=4, kx=kx, ky=ky)
+@pytest.fixture
+def stack_axes():
+    return {
+        "time_axis": np.arange(2),
+        "contrast_axis": np.arange(3),
+        "slice_axis": np.arange(4),
+    }
 
-    assert traj.indexes.shape[0] == 2
-    assert traj.values.shape[0] == 2
-    assert traj.values.shape[1] == kx.size
+
+# === Tests for 2D Trajectories === #
+def test_basic_2d_trajectory(kspace_2d):
+    kx, ky = kspace_2d
+    traj = Trajectory(ndim=2, nx=128, ny=128, kx=kx, ky=ky)
+
+    assert traj.ndim == 2
+    assert traj.kx.shape == (1, 1, 1, 4, 128)
+    assert traj.grid_shape == (128, 128)
+    assert traj.kz is None
+    assert "2D trajectory" in str(traj)
 
 
-def test_2d_with_stack(kspace_coords_2d):
-    kx, ky = kspace_coords_2d
-    slice_axis = np.arange(3)
-    contrast_axis = np.arange(2)
+def test_2d_with_stack_axes(kspace_2d, stack_axes):
+    kx, ky = kspace_2d
+    traj = Trajectory(ndim=2, nx=128, ny=128, kx=kx, ky=ky, **stack_axes)
 
+    coords, indexes = traj.coords_and_indexes
+    assert coords.shape[1] == 2
+    assert indexes.shape[1] == 3
+    assert traj.stack_shape == (2, 3, 4)
+
+
+def test_hybrid_trajectory_ndim3(kspace_2d, stack_axes):
+    kx, ky = kspace_2d
     traj = Trajectory(
-        ndim=2,
-        nx=4,
-        ny=4,
-        kx=kx,
-        ky=ky,
-        slice_axis=slice_axis,
-        contrast_axis=contrast_axis,
+        ndim=3, nx=128, ny=128, kx=kx, ky=ky, slice_axis=stack_axes["slice_axis"]
     )
+    assert traj.ndim == 3
+    assert traj._hybrid_trajectory is True
+    coords, indexes = traj.coords_and_indexes
+    assert coords.shape[1] == 3
+    assert traj.nz == 4
 
-    n_stack = len(slice_axis) * len(contrast_axis)
-    n_spatial = kx.size
-    assert traj.indexes.shape == (2, n_stack * n_spatial)
-    assert traj.values.shape == (2, n_stack * n_spatial)
+
+# === Tests for 3D Trajectories === #
+def test_basic_3d_trajectory(kspace_3d):
+    kx, ky, kz = kspace_3d
+    traj = Trajectory(ndim=3, nx=128, ny=128, nz=64, kx=kx, ky=ky, kz=kz)
+
+    assert traj.ndim == 3
+    assert traj.kz is not None
+    assert traj.grid_shape == (64, 128, 128)
+
+    coords, indexes = traj.coords_and_indexes
+    assert coords.shape[1] == 3
 
 
-def test_3d_with_stack(kspace_coords_3d):
-    kx, ky, kz = kspace_coords_3d
-    time_axis = np.arange(3)
-
+def test_3d_with_stack_axes(kspace_3d, stack_axes):
+    kx, ky, kz = kspace_3d
     traj = Trajectory(
         ndim=3,
-        nx=4,
-        ny=4,
-        nz=4,
+        nx=128,
+        ny=128,
+        nz=64,
         kx=kx,
         ky=ky,
         kz=kz,
-        time_axis=time_axis,
+        time_axis=stack_axes["time_axis"],
+        contrast_axis=stack_axes["contrast_axis"],
     )
 
-    n_stack = len(time_axis)
-    n_spatial = kx.size
-    assert traj.indexes.shape == (2, n_stack * n_spatial)
-    assert traj.values.shape == (2, n_stack * n_spatial)  # kx, ky, kz
+    assert traj.stack_shape[:2] == (2, 3)
+    coords, indexes = traj.coords_and_indexes
+    assert coords.shape[1] == 3
+    assert indexes.shape[1] == 2
 
 
-def test_index_value_consistency(kspace_coords_2d):
-    kx, ky = kspace_coords_2d
-    time_axis = np.arange(2)
-    traj = Trajectory(
-        ndim=2,
-        nx=4,
-        ny=4,
-        kx=kx,
-        ky=ky,
-        time_axis=time_axis,
-        nframes=2,
-    )
+# === Internal Logic Tests === #
+def test_coords_and_indexes_match_shapes(kspace_2d, stack_axes):
+    kx, ky = kspace_2d
+    traj = Trajectory(ndim=2, nx=128, ny=128, kx=kx, ky=ky, **stack_axes)
 
-    # index[1] gives spatial index
-    # values[:, i] should equal the corresponding raveled coordinates
-    spatial = traj.indexes[1]
-    for i, s in enumerate(spatial):
-        np.testing.assert_allclose(
-            traj.values[:, i], [traj.kx.ravel()[s], traj.ky.ravel()[s]]
-        )
+    coords, indexes = traj.coords_and_indexes
+    assert coords.shape[0] == indexes.shape[0]
 
 
-def test_caching_of_indexes_and_values(kspace_coords_2d):
-    kx, ky = kspace_coords_2d
-    traj = Trajectory(ndim=2, nx=4, ny=4, kx=kx, ky=ky)
-    # Access triggers caching
-    _ = traj.indexes
-    _ = traj.values
-    assert traj._indexes is not None
-    assert traj._values is not None
+def test_stack_shape_inference(kspace_2d, stack_axes):
+    kx, ky = kspace_2d
+    traj = Trajectory(ndim=2, nx=128, ny=128, kx=kx, ky=ky, **stack_axes)
+    assert traj.stack_shape == (2, 3, 4)
 
 
-def test_single_element_stack_axes(kspace_coords_2d):
-    kx, ky = kspace_coords_2d
-    traj = Trajectory(
-        ndim=2,
-        nx=4,
-        ny=4,
-        kx=kx,
-        ky=ky,
-        nslices=1,
-        ncontrasts=1,
-        nframes=1,
-        slice_axis=np.array([0]),
-        contrast_axis=np.array([0]),
-        time_axis=np.array([0]),
-    )
+@pytest.mark.parametrize("axes_combo", list(itertools.product([True, False], repeat=3)))
+def test_partial_stack_axes_combinations(kspace_2d, axes_combo):
+    include_time, include_contrast, include_slice = axes_combo
+    kx, ky = kspace_2d
 
-    n_spatial = kx.size
-    assert traj.indexes.shape == (2, n_spatial)
-    assert traj.values.shape == (2, n_spatial)
+    kwargs = {"ndim": 2, "nx": 128, "ny": 128, "kx": kx, "ky": ky}
+    expected_stack_shape = []
+
+    if include_time:
+        kwargs["time_axis"] = np.arange(2)
+        expected_stack_shape.append(2)
+    if include_contrast:
+        kwargs["contrast_axis"] = np.arange(3)
+        expected_stack_shape.append(3)
+    if include_slice:
+        kwargs["slice_axis"] = np.arange(4)
+        expected_stack_shape.append(4)
+
+    traj = Trajectory(**kwargs)
+
+    assert traj.ndim == 2
+    assert traj.kx.shape == (1, 1, 1, 4, 128)
+    assert traj.grid_shape == (128, 128)
+    assert traj.stack_shape == tuple(expected_stack_shape)
+
+    coords, indexes = traj.coords_and_indexes
+    assert coords.shape[1] == 2  # 2D coords
+    if len(expected_stack_shape):
+        assert coords.shape[0] == indexes.shape[0]
+        assert indexes.shape[1] == len(expected_stack_shape)
+
+
+@pytest.mark.parametrize("axes_combo", list(itertools.product([True, False], repeat=2)))
+@pytest.mark.parametrize("hybrid", [True, False])
+def test_partial_stack_axes_combinations_3d(kspace_3d, axes_combo, hybrid):
+    include_time, include_contrast = axes_combo
+    kx, ky, kz = kspace_3d
+
+    kwargs = {"ndim": 3, "nx": 64, "ny": 64, "kx": kx, "ky": ky}
+    expected_stack_shape = []
+
+    # Use either kz (Fourier stack) or slice_axis (hybrid stack) for the z-dimension
+    if hybrid:
+        kwargs["slice_axis"] = np.arange(5)
+        expected_stack_shape.append(5)
+    else:
+        kwargs["nz"] = 5
+        kwargs["kz"] = kz
+
+    if include_time:
+        kwargs["time_axis"] = np.arange(2)
+        expected_stack_shape.insert(0, 2)
+    if include_contrast:
+        kwargs["contrast_axis"] = np.arange(3)
+        if include_time:
+            expected_stack_shape.insert(1, 3)
+        else:
+            expected_stack_shape.insert(0, 3)
+
+    traj = Trajectory(**kwargs)
+
+    assert traj.ndim == 3
+    assert traj.kx.ndim >= 2
+    if hybrid:
+        assert traj._hybrid_trajectory is True
+    else:
+        assert traj.kz is not None
+
+    coords, indexes = traj.coords_and_indexes
+    assert coords.shape[1] == 3  # 3D coords
+    if len(expected_stack_shape):
+        assert coords.shape[0] == indexes.shape[0]
+        assert indexes.shape[1] == len(expected_stack_shape)
+
+
+def test_shape_property(kspace_2d, stack_axes):
+    kx, ky = kspace_2d
+    traj = Trajectory(ndim=2, nx=128, ny=128, kx=kx, ky=ky, **stack_axes)
+    assert traj.shape == (2, 3, 4, 128, 128)
+
+
+def test_lazy_evaluation_caching(kspace_2d, stack_axes):
+    kx, ky = kspace_2d
+    traj = Trajectory(ndim=2, nx=128, ny=128, kx=kx, ky=ky, **stack_axes)
+
+    coords1, indexes1 = traj.coords_and_indexes
+    coords2, indexes2 = traj.coords_and_indexes  # should be cached
+    np.testing.assert_array_equal(coords1, coords2)
+    np.testing.assert_array_equal(indexes1, indexes2)
+
+
+def test_str_repr(kspace_2d, stack_axes):
+    kx, ky = kspace_2d
+    traj = Trajectory(ndim=2, nx=128, ny=128, kx=kx, ky=ky, **stack_axes)
+    assert isinstance(str(traj), str)
+    assert "trajectory" in str(traj)

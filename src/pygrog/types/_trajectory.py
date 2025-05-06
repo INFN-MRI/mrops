@@ -21,37 +21,56 @@ if CUPY_AVAILABLE:
 @dataclass
 class Trajectory:
     """
-    K-space trajectory representation supporting optional stack dimensions.
+    A flexible and extensible representation of a k-space trajectory for MRI.
+
+    This container supports optional stack dimensions (time, contrast, and slice) and
+    2D/3D spatial configurations.
+
+    This class handles the storage, normalization, and broadcasting of k-space
+    coordinates (``kx``, ``ky``, and optionally ``kz``) along with their associated
+    stack dimensions (``time_axis``, ``contrast_axis``, ``slice_axis``). It supports
+    both standard and hybrid trajectories, with automatic expansion of stack
+    axes and validation of coordinate shapes.
 
     Parameters
     ----------
     ndim : int
-        Number of spatial dimensions (typically 2 or 3).
+        Number of spatial dimensions (2 or 3).
     nx : int
-        Size along the x-axis in k-space.
+        Grid size along the x-axis.
     ny : int
-        Size along the y-axis in k-space.
+        Grid size along the y-axis.
     kx : NDArray
-        Array of x-coordinates in k-space.
+        X-coordinates of k-space samples (≥2D).
     ky : NDArray
-        Array of y-coordinates in k-space.
+        Y-coordinates of k-space samples (≥2D).
     nz : int, optional
-        Size along the z-axis in k-space.
+        Grid size along the z-axis (required if ``kz`` is provided).
     kz : NDArray, optional
-        Array of z-coordinates in k-space.
+        Z-coordinates of k-space samples.
     slice_axis : NDArray, optional
-        Axis for slice indexing.
+        1D index array for slices.
     contrast_axis : NDArray, optional
-        Axis for contrast indexing.
+        1D index array for contrast types.
     time_axis : NDArray, optional
-        Axis for time/frame indexing.
+        1D index array for time frames.
     nslices : int, optional
-        Number of slices.
+        Number of slices. Required if ``slice_axis` ' is not provided.
     ncontrasts : int, optional
-        Number of contrasts.
+        Number of contrast types. Required if ` 'contrast_axis`` is not provided.
     nframes : int, optional
-        Number of frames.
+        Number of time frames. Required if ` 'time_axis`` is not provided.
 
+    Attributes
+    ----------
+    coords_and_indexes : tuple
+        Returns broadcasted k-space coordinates and corresponding stack indices.
+    shape : tuple
+        Full shape of the data implied by trajectory and stack axes.
+    stack_shape : tuple
+        Shape of stack dimensions ``(frames, contrasts, slices)``.
+    grid_shape : tuple
+        Shape of spatial grid ``(ny, nx)`` or ``(nz, ny, nx)``.
     """
 
     ndim: int
@@ -109,13 +128,22 @@ class Trajectory:
             active_axes.append("slice_axis")
 
         # Compute broadcast shapes and assign dynamic indices
-        shape_template = [1] * len(active_axes)
+        axis_defs = {
+            "time_axis": 0,
+            "contrast_axis": 1,
+            "slice_axis": 2,
+        }
+        shape_template = [1, 1, 1]
         axis_index_map = {}
 
         for i, name in enumerate(active_axes):
             arr = getattr(self, name)
+            if len(arr.shape) != 1:
+                raise ValueError(f"{name} must be at most 1D, got shape {arr.shape}")
             shape = list(shape_template)
-            shape[i] = arr.shape[0]  # Expand only in the correct dimension
+            shape[axis_defs[name]] = arr.shape[
+                0
+            ]  # Expand only in the correct dimension
             setattr(self, name, arr.reshape(shape))  # Explicit reshape
             axis_index_map[f"{name}_index"] = i  # Assign dynamic index
 
@@ -167,6 +195,10 @@ class Trajectory:
         # Default normalization
         self.scale_coords(self.nx, self.ny, self.nz)
 
+        # Lazy cache
+        self._indexes = None
+        self._coords = None
+
     def info(self) -> str:
         """Return a human-readable summary of trajectory shape and axes."""
         lines = []
@@ -203,90 +235,106 @@ class Trajectory:
     def __str__(self):  # noqa
         return self.info()
 
-    def coords(self):  # noqa
-        fourier_coords = self.fourier_coords(raveled=True)
-        stack_indexes = self.stack_indexes(raveled=True)
+    @property
+    def coords_and_indexes(self):  # noqa
+        if self._indexes is not None:
+            return self._coords, self._indexes
+        xp = self.xp
+
+        # Build trajectory
+        kz = None
         if self._hybrid_trajectory:
-            return fourier_coords[..., :-1], stack_indexes
+            kz = self.xp.tile(self.kz, self.kx.shape[-2:])
+            ky = xp.broadcast_to(self.ky, kz.shape).copy()
+            kx = xp.broadcast_to(self.kx, kz.shape).copy()
+
+            # Expand across time
+            if self.time_axis is not None:
+                kz = xp.repeat(kz, self.nframes, axis=0)
+                ky = xp.repeat(ky, self.nframes, axis=0)
+                kx = xp.repeat(kx, self.nframes, axis=0)
+
+            # Expand across contrasts
+            if self.contrast_axis is not None:
+                kz = xp.repeat(kz, self.ncontrasts, axis=1)
+                ky = xp.repeat(ky, self.ncontrasts, axis=1)
+                kx = xp.repeat(kx, self.ncontrasts, axis=1)
         else:
-            return fourier_coords, stack_indexes
+            if self.ndim == 3:
+                kz = self.kz
+            ky = self.ky
+            kx = self.kx
+
+            # Expand across time
+            if self.time_axis is not None:
+                if self.ndim == 3:
+                    kz = xp.repeat(kz, self.nframes, axis=0)
+                ky = xp.repeat(ky, self.nframes, axis=0)
+                kx = xp.repeat(kx, self.nframes, axis=0)
+
+            # Expand across contrasts
+            if self.contrast_axis is not None:
+                if self.ndim == 3:
+                    kz = xp.repeat(kz, self.ncontrasts, axis=1)
+                ky = xp.repeat(ky, self.ncontrasts, axis=1)
+                kx = xp.repeat(kx, self.ncontrasts, axis=1)
+
+            # Expand across contrasts
+            if self.slice_axis is not None and self.ndim == 2:
+                ky = xp.repeat(ky, self.nslices, axis=2)
+                kx = xp.repeat(kx, self.nslices, axis=2)
+
+        if kz is not None:
+            self._coords = xp.stack((kx, ky, kz), axis=-1)
+        else:
+            self._coords = xp.stack((kx, ky), axis=-1)
+
+        # Build indexes
+        self._indexes = []
+        if self.time_axis is not None:
+            self._indexes.append(
+                xp.broadcast_to(self.time_axis[..., None, None], kx.shape)
+            )
+
+        # Expand across contrasts
+        if self.contrast_axis is not None:
+            self._indexes.append(
+                xp.broadcast_to(self.contrast_axis[..., None, None], kx.shape)
+            )
+
+        # Expand across contrasts
+        if self.slice_axis is not None:
+            self._indexes.append(
+                xp.broadcast_to(self.slice_axis[..., None, None], kx.shape)
+            )
+        if self._indexes:
+            self._indexes = xp.stack(self._indexes, axis=-1)
+            self._indexes = self._indexes.reshape(-1, self._indexes.shape[-1])
+
+        # Reshape coords
+        self._coords = self._coords.reshape(-1, self._coords.shape[-1])
+
+        return self._coords, self._indexes
 
     @property
     def shape(self):  # noqa
-        return (self.nframes, self.ncontrasts, self.nslices, self.nx, self.ny, self.nz)
+        if self._hybrid_trajectory or self.ndim == 2:
+            shape = [self.nframes, self.ncontrasts, self.nslices, self.ny, self.nx]
+        else:
+            shape = [self.nframes, self.ncontrasts, self.nz, self.ny, self.nx]
+        return tuple([sz for sz in shape if sz != 1])
 
     @property
     def grid_shape(self):  # noqa
-        return (self.nx, self.ny, self.nz)
+        if self._hybrid_trajectory or self.ndim == 2:
+            return (self.ny, self.nx)
+        else:
+            return (self.nz, self.ny, self.nx)
 
     @property
     def stack_shape(self):  # noqa
-        return (self.nframes, self.ncontrasts, self.nslices)
-
-    def fourier_coords(self, raveled: bool = False) -> NDArray:
-        """
-        Return spatial k-space coordinates.
-
-        Parameters
-        ----------
-        raveled : bool, optional
-            If true, ravel coordinates before stacking. The default is ``False``.
-
-        Returns
-        -------
-        NDArray
-            K-Space coordinates of shape ``(..., ndim)``.
-
-        """
-        xp = self.xp
-        if self._hybrid_trajectory:
-            self.kz = self.xp.tile(self, self.kz, self.kx.shape[-2:])
-            self.kx = xp.broadcast_to(self.kx, self.kz.shape).copy()
-            self.ky = xp.broadcast_to(self.ky, self.kz.shape).copy()
-
-        # assemble spatial coordinates
-        if self.kz is not None:
-            if raveled:
-                return xp.stack(
-                    (self.kx.ravel(), self.ky.ravel(), self.kz.ravel()), axis=-1
-                )
-            return xp.stack((self.kx, self.ky, self.kz), axis=-1)
-        if raveled:
-            return xp.stack((self.kx.ravel(), self.ky.ravel()), axis=-1)
-        return xp.stack((self.kx, self.ky), axis=-1)
-
-    def stack_indexes(self, raveled: bool = False) -> NDArray:
-        """
-        Return stack k-space indexes.
-
-        Parameters
-        ----------
-        raveled : bool, optional
-            If true, ravel coordinates before stacking. The default is ``False``.
-
-        Returns
-        -------
-        NDArray
-            K-Space stack indexes of shape ``(..., ndim)``.
-
-        """
-        stack_axes = []
-        if self.time_axis is not None:
-            if raveled:
-                stack_axes.append(self.time_axis.ravel())
-            else:
-                stack_axes.append(self.time_axis)
-        if self.contrast_axis is not None:
-            if raveled:
-                stack_axes.append(self.contrast_axis.ravel())
-            else:
-                stack_axes.append(self.contrast_axis)
-        if self.slice_axis is not None:
-            if raveled:
-                stack_axes.append(self.slice_axis.ravel())
-            else:
-                stack_axes.append(self.slice_axis)
-        return self.xp.stack(stack_axes, axis=-1)
+        shape = [self.nframes, self.ncontrasts, self.nslices]
+        return tuple([sz for sz in shape if sz != 1])
 
     def scale_coords(self, ax: float, ay: float | None = None, az: float | None = None):
         """
