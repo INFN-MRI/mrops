@@ -52,7 +52,6 @@ class _NormalOperator(BaseOperator):
 
 
 class IdentityOperator(BaseOperator):
-
     def __init__(self):
         super().__init__()
 

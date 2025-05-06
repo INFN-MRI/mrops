@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from mrops.types import Trajectory
+from pygrog.types import Trajectory
 
 
 @pytest.fixture

@@ -91,7 +91,7 @@ class Trajectory:
         self.device = device
         self.dtype = dtype
 
-        # initialize stack axes from sizes if needed
+        # Initialize stack axes from sizes if needed
         if self.slice_axis is None and self.nslices is not None:
             self.slice_axis = xp.arange(self.nslices, dtype=int)
         if self.contrast_axis is None and self.ncontrasts is not None:
@@ -99,29 +99,31 @@ class Trajectory:
         if self.time_axis is None and self.nframes is not None:
             self.time_axis = xp.arange(self.nframes, dtype=int)
 
-        # Initialize axis indices and expand axes
-        axis_defs = [
-            ("time_axis", 0),
-            ("contrast_axis", 1),
-            ("slice_axis", 2),
-        ]
+        # Determine which stack axes are active and assign dynamic indices
+        active_axes = []
+        if self.time_axis is not None:
+            active_axes.append("time_axis")
+        if self.contrast_axis is not None:
+            active_axes.append("contrast_axis")
+        if self.slice_axis is not None:
+            active_axes.append("slice_axis")
+
+        # Compute broadcast shapes and assign dynamic indices
+        shape_template = [1] * len(active_axes)
         axis_index_map = {}
-        shape_template = [1, 1, 1]
 
-        for name, idx in axis_defs:
+        for i, name in enumerate(active_axes):
             arr = getattr(self, name)
-            if arr is not None:
-                # Register axis index
-                axis_index_map[name + "_index"] = idx
-                # Expand array shape to be broadcast-compatible
-                expanded_shape = list(shape_template)
-                expanded_shape[idx] = arr.shape[0]
-                setattr(self, name, arr.reshape(expanded_shape))
+            shape = list(shape_template)
+            shape[i] = arr.shape[0]  # Expand only in the correct dimension
+            setattr(self, name, arr.reshape(shape))  # Explicit reshape
+            axis_index_map[f"{name}_index"] = i  # Assign dynamic index
 
+        # Assign computed indices (e.g., self.time_axis_index, self.slice_axis_index, etc.)
         for attr, val in axis_index_map.items():
             setattr(self, attr, val)
 
-        # store stack lengths
+        # Store stack lengths
         self.nframes = self.time_axis.max() + 1 if self.time_axis is not None else 1
         self.ncontrasts = (
             self.contrast_axis.max() + 1 if self.contrast_axis is not None else 1
@@ -136,7 +138,7 @@ class Trajectory:
         if self.kz is not None and self.kz.ndim < 2:
             raise ValueError(f"kz must be at least 2D, got shape {self.kz.shape}")
 
-        # Handle the case for ndim=3 with slice_axis and kz
+        # Handle ndim=3 with mutual exclusivity for slice_axis and kz
         if self.ndim == 3:
             if self.slice_axis is not None and self.kz is not None:
                 raise ValueError(
@@ -150,23 +152,19 @@ class Trajectory:
                     self.kz = (
                         _astype(self.slice_axis, self.kx.dtype) - 0.5 * self.nslices
                     ) / self.nslices
-                    self.kz = self.kz[..., None, None]
+                    self.kz = self.kz[..., None, None]  # Add singleton dimensions
 
         # Compute expected stack shape
-        full_coords_shape = [
-            self.nframes if self.time_axis is not None else 1,
-            self.ncontrasts if self.contrast_axis is not None else 1,
-            self.nslices if self.slice_axis is not None else 1,
-        ]
+        full_coords_shape = [self.nframes, self.ncontrasts, self.nslices]
         self.kx = _normalize_kn(self.kx, "kx", full_coords_shape)
         self.ky = _normalize_kn(self.ky, "ky", full_coords_shape)
         if self.kz is not None:
             self.kz = _normalize_kn(self.kz, "kz", full_coords_shape)
 
-        # enforce homogeneous dtype/device
+        # Enforce homogeneous dtype/device
         self.to(device, dtype, xp)
 
-        # default normalization
+        # Default normalization
         self.scale_coords(self.nx, self.ny, self.nz)
 
     def info(self) -> str:

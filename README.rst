@@ -1,77 +1,54 @@
-mrops: Matrix-Free MRI Reconstruction Operators
-==============================================
+pygrog: A PyTorch-based Package for GROG Interpolation
+======================================================
 
-*mrops* is a lightweight Python library for matrix-free MRI reconstruction.  
-Built on top of `SigPy <https://github.com/mikgroup/sigpy>`_, *mrops* provides  
-drop-in replacements for SigPy operators such as `NUFFT` and `FFT`, leveraging  
-state-of-the-art implementations like `FINUFFT <https://finufft.readthedocs.io>`_  
-and `cuFINUFFT <https://github.com/flatironinstitute/cufinufft>`_ for optimal  
-performance.  
-
-Additionally, *mrops* offers seamless interoperability with  
-`scipy.sparse.linalg.LinearOperator` and `cupyx.scipy.sparse.linalg.LinearOperator`,  
-enabling integration with established optimization solvers like Conjugate Gradient (CG)  
-and Least Squares Minimal Residual (LSMR). It also supports PyTorch autograd,  
-allowing its operators to be used in deep learning-based image reconstruction frameworks  
-such as `deepinv <https://github.com/deepinv/deepinv>`_ and  
-`DeepInPy <https://github.com/deepinpy/deepinpy>`_.  
+PyGROG is a lightweight PyTorch library for implementing GRAPPA operator gridding (GROG).
+ 
+This package enables efficient interpolation of non-Cartesian MRI data onto Cartesian grids using GROG operator
+and faster iterative reconstruction. 
 
 Key Features
 ------------
 
-- **Optimized MRI Reconstruction**: Drop-in replacements for SigPy's `NUFFT`, `FFT`, etc.
-- **High-Performance Implementations**: Uses `finufft` and `cufinufft` for acceleration.
-- **Interoperability with SciPy & CuPy**: Compatible with `LinearOperator`-based solvers.
-- **PyTorch Support**: Enables deep learning-based reconstruction workflows.
-- **GPU Acceleration**: Leverages CUDA-based libraries for efficient computations.
+- **Trajectory Pre-processing**: Pre-sort k-space trajectory for fast non-Cartesian dataset interpolation at runtime.
+- **GRAPPA Training**: Set up and train GROG interpolation kernel.
+- **Interpolation**: Apply GROG operator to new non-Cartesian datasets for interpolation.
+- **Fast zero-filling and indexing**: Convert interpolated sparse data to dense Cartesian grids and vice-versa.
+- **Expanded Fourier Model**: Expand signal model to include subspace projection and off-resonance modeling.
+
+In addition:
+
+- **Calibration**: Extract low-resolution k-space data or synthesize calibration data based on NLINV.
+- **Interoperability with SciPy & CuPy**: Compatible with LinearOperator-based solvers.
 
 Installation
 ------------
 
-You can install *mrops* via pip:
+You can install PyGROG via pip:
 
 .. code-block:: bash
 
-    pip install mrops
-
-To use GPU acceleration, make sure you have `cuFINUFFT` installed:
-
-.. code-block:: bash
-
-    pip install cufinufft
+    pip install pygrog
 
 Getting Started
 ---------------
 
-Here's a quick example demonstrating how to use *mrops*:
+Here's a quick example demonstrating how to use PyGROG:
 
 .. code-block:: python
 
-    import mrops
-    import sigpy as sp
+    import pygrog
     import numpy as np
 
-    # Define an MRI sampling pattern
-    shape = (256, 256)
-    mask = np.random.rand(*shape) < 0.3  # Simulated undersampling mask
-
-    # Create an NUFFT operator using mrops
-    nufft_op = mrops.NUFFT(shape, mask)
-
-    # Apply forward and adjoint operations
-    img = np.random.randn(*shape) + 1j * np.random.randn(*shape)
-    kspace = nufft_op * img  # Forward NUFFT
-    img_recon = nufft_op.H * kspace  # Adjoint NUFFT
 
 Contributing
 ------------
 
 We welcome contributions! If you find a bug, have a feature request,  
 or want to contribute, please open an issue or submit a pull request  
-on our `GitHub repository <https://github.com/yourusername/mrops>`_.  
+on our `GitHub repository <https://github.com/INFN-MRI/pygrog>`_.  
 
 License
 -------
 
-*mrops* is released under the MIT License.
+PyGROG is released under the MIT License.
 

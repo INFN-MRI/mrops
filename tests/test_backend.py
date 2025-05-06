@@ -12,7 +12,7 @@ try:
 except ImportError:
     CUPY_AVAILABLE = False
 
-from mrops import backend
+from pygrog import backend
 
 
 def test_device_cpu_creation():

@@ -4,15 +4,15 @@ requires = ["setuptools", "setuptools_scm[toml]", "wheel"]
 
 
 [project]
-name = "mrops"
-description = "MRI Linear operator library based on SigPy."
+name = "pygrog"
+description = "A package for MR reconstruction via GRAPPA Operator (GROG) interpolation."
 readme = "README.rst"
 
 requires-python = ">=3.10"
 dynamic = ["version"]
 
 license = {file = "LICENSE.txt"}
-keywords = ["mri", "linop"]
+keywords = ["mri", "linop", "parallel-imaging"]
 
 authors = [
   {name = "Matteo Cencini", email = "matteo.cencini@gmail.com" } # Optional
@@ -62,15 +62,15 @@ doc = [
 # List URLs that are relevant to your project
 # This field corresponds to the "Project-URL" and "Home-Page" metadata fields:
 [project.urls]  # Optional
-"Homepage" = "https://github.com/INFN-MRI/mrops"
-"Bug Reports" = "https://github.com/INFN-MRI/mrops/issues"
-"Source" = "https://github.com/INFN-MRI/mrops"
+"Homepage" = "https://github.com/INFN-MRI/pygrog"
+"Bug Reports" = "https://github.com/INFN-MRI/pygrog/issues"
+"Source" = "https://github.com/INFN-MRI/pygrog"
 
 [tool.setuptools.packages.find]
 where=["src"]
 
 [tool.setuptools_scm]
-write_to = "src/mrops/_version.py"
+write_to = "src/pygrog/_version.py"
 version_scheme = "python-simplified-semver"
 local_scheme="no-local-version"
 fallback_version="v99-dev"
@@ -85,7 +85,7 @@ profile="black"
 minversion = "6.0"
 testpaths = "tests"
 # addopts = [
-#    "--cov=mrops",
+#    "--cov=pygrog",
 #    "--cov-report=term-missing",
 #    "--cov-report=xml"
 #]
